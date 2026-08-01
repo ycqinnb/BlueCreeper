@@ -1,0 +1,41 @@
+package yc.ycqin.doth.proxy;
+
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.entity.RenderPlayer;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.client.registry.RenderingRegistry;
+import net.minecraftforge.fml.common.event.FMLInitializationEvent;
+import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
+import yc.ycqin.doth.client.DOTHKeyBind;
+import yc.ycqin.doth.client.render.entity.RenderEntityItemSwordHighlight;
+import yc.ycqin.doth.client.render.shader.ShaderHelper;
+import yc.ycqin.doth.common.entities.EntityItemSwordHighlight;
+import yc.ycqin.doth.common.item.ModelReg;
+import yc.ycqin.doth.event.ClientEvent;
+import yc.ycqin.doth.event.EntityHighlightHandler;
+
+import java.util.Map;
+
+
+public class ClientProxy extends CommonProxy {
+
+    public void preInit(FMLPreInitializationEvent event){
+        super.preInit(event);
+        // 注册闪光掉落物的客户端渲染器
+        RenderingRegistry.registerEntityRenderingHandler(
+                EntityItemSwordHighlight.class,
+                new RenderEntityItemSwordHighlight.Factory()
+        );
+        MinecraftForge.EVENT_BUS.register(new ClientEvent());
+        MinecraftForge.EVENT_BUS.register(new EntityHighlightHandler());
+        new ModelReg();
+        ShaderHelper.initShaders();
+    }
+
+    public void init(FMLInitializationEvent event){
+        super.init(event);
+        DOTHKeyBind.register(event);
+    }
+
+}

@@ -1,0 +1,6 @@
+{
+  "parent": "item/handheld",
+  "textures": {
+    "layer0": "bluecreepersword:items/blue_creeper_sword"
+  }
+}

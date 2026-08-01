@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "CHC",
+    "CLC",
+    "CSC"
+  ],
+  "key": {
+    "C": { "item": "bluecreepersword:compressed_clip", "data": 8 },
+    "H": { "item": "minecraft:skull", "data": 4 },
+    "L": { "item": "minecraft:lapis_block" },
+    "S": { "item": "minecraft:stick" }
+  },
+  "result": {
+    "item": "bluecreepersword:blue_creeper_sword"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "CCC",
+    "CCC",
+    "CCC"
+  ],
+  "key": {
+    "C": { "item": "bluecreepersword:compressed_clip", "data": 1 }
+  },
+  "result": {
+    "item": "bluecreepersword:compressed_clip",
+    "data": 2
+  }
+}

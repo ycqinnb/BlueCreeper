@@ -1,0 +1,6 @@
+{
+  "parent": "block/cube_all",
+  "textures": {
+    "all": "bluecreepersword:blocks/block_fighter"
+  }
+}

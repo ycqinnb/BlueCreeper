@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "bluecreepersword:compressed_clip", "data": 8 }
+  ],
+  "result": {
+    "item": "bluecreepersword:compressed_clip",
+    "data": 7,
+    "count": 9
+  }
+}
