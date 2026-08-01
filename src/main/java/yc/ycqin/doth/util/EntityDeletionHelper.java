@@ -98,7 +98,7 @@ public class EntityDeletionHelper {
                 try {
                     boolean enhanced = (player != null && stack != null) ? SwordConfigHelper.isEnhancedEnabled(player, stack) : (stack != null && SwordConfigHelper.isEnhancedEnabled(stack));
                     if (enhanced){
-                        target.isDead = true;
+
                         if (target instanceof EntityLivingBase) {
                             EntityLivingBase living = (EntityLivingBase) target;
                             int xp = 0;
@@ -121,7 +121,7 @@ public class EntityDeletionHelper {
                                 }
                             }
                         }
-                       // if (!world.isRemote){
+                        if (!world.isRemote){
                             world.removeEntity(target);
                             world.onEntityRemoved(target);
                             int chunkX = (int) Math.floor(target.posX) >> 4;
@@ -134,7 +134,7 @@ public class EntityDeletionHelper {
                                         : (stack != null && SwordConfigHelper.isPurgeNBT(stack));
                                 if (purge) {
                                     Chunk c = world.getChunkFromChunkCoords(chunkX, chunkZ);
-                                    //world.loadedEntityList.remove(target);
+                                    world.loadedEntityList.remove(target);
                                     world.removeEntity(target);
                                     c.removeEntity(target);
                                     target.isDead = true;
@@ -169,11 +169,13 @@ public class EntityDeletionHelper {
                                         }
                                         cps.queueUnload(c);
                                         c.onUnload();
+                                        cps.id2ChunkMap.remove(c);
                                     }
                                 }
                             }
                             world.loadedEntityList.remove(target);
-                       // }
+                        }
+                        forceClientCleanup(target);
                     }
                 } catch (Exception ignored) {
                     log.error(String.valueOf(ignored));
@@ -192,9 +194,8 @@ public class EntityDeletionHelper {
                 if (!world.isRemote){
                     Dead((EntityPlayer) target);
                 }
-                target.isDead = true;
             }
-
+            target.isDead = true;
         } catch (Exception e) {
             // 以防万一，捕获所有异常防止崩服
             System.err.println("Failed to delete entity: " + target.getClass().getName());
