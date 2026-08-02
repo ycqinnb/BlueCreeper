@@ -1,8 +1,10 @@
 package yc.ycqin.doth.world;
 
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.DimensionType;
 import net.minecraft.world.WorldProvider;
+import net.minecraft.world.biome.Biome;
 import net.minecraft.world.gen.IChunkGenerator;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
@@ -67,5 +69,17 @@ public class ArenaWorldProvider extends WorldProvider {
     @Override
     public boolean doesXZShowFog(int x, int z) {
         return false;
+    }
+
+    // ===== 场地生物群系 = 选手方块所在生物群系（F3 显示/颜色） =====
+    @Override
+    public Biome getBiomeForCoords(BlockPos pos) {
+        if (ArenaManager.isLeftPlatform(pos.getX(), pos.getZ())) {
+            return ArenaManager.getLeftBiome();
+        }
+        if (ArenaManager.isRightPlatform(pos.getX(), pos.getZ())) {
+            return ArenaManager.getRightBiome();
+        }
+        return super.getBiomeForCoords(pos);
     }
 }

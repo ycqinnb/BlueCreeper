@@ -29,7 +29,7 @@ public class BlockReg {
     @SubscribeEvent
     public void registerItems(RegistryEvent.Register<Item> event) {
         event.getRegistry().registerAll(
-                new ItemBlock(BLOCK_ARENA).setRegistryName(BLOCK_ARENA.getRegistryName()),
+                new ItemBlockArena(BLOCK_ARENA).setRegistryName(BLOCK_ARENA.getRegistryName()),
                 new ItemBlockFighter(BLOCK_FIGHTER).setRegistryName(BLOCK_FIGHTER.getRegistryName())
         );
     }

@@ -6,7 +6,10 @@
     "PPP"
   ],
   "key": {
-    "P": { "item": "minecraft:potion" },
+    "P": [
+      { "item": "minecraft:diamond" },
+      { "item": "minecraft:potion" }
+    ],
     "B": { "item": "bluecreepersword:bio_photo" }
   },
   "result": {

@@ -27,11 +27,16 @@ public class ItemBlockFighter extends ItemBlock {
             return false;
         }
         TileEntity te = world.getTileEntity(pos);
-        if (te instanceof TileEntityFighter && stack.hasTagCompound()) {
-            NBTTagCompound outer = stack.getTagCompound();
-            if (outer.hasKey("FighterNbt")) {
-                ((TileEntityFighter) te).setFighterNbt(outer.getCompoundTag("FighterNbt"));
+        if (te instanceof TileEntityFighter) {
+            NBTTagCompound fighterNbt = new NBTTagCompound();
+            if (stack.hasTagCompound() && stack.getTagCompound().hasKey("FighterNbt")) {
+                fighterNbt = stack.getTagCompound().getCompoundTag("FighterNbt");
             }
+            // 铁砧改名 → 把自定义名写进选手数据，战斗/结算时显示
+            if (stack.hasDisplayName()) {
+                fighterNbt.setString("TeamName", stack.getDisplayName());
+            }
+            ((TileEntityFighter) te).setFighterNbt(fighterNbt);
         }
         return true;
     }
