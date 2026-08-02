@@ -31,6 +31,7 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.storage.WorldSavedData;
 import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import org.apache.logging.log4j.LogManager;
@@ -69,6 +70,8 @@ public class ArenaManager {
     private static int arenaSize = 15;
     private static final int ARENA_SIZE_MIN = 5;
     private static final int ARENA_SIZE_MAX = 100;
+    /** 上次实际构建的尺寸（存档持久化，清理时按新旧并集清除，防残留） */
+    private static int builtSize = 0;
     /** 左地块 x 范围 */
     private static int leftX1 = -18, leftX2 = -4;
     /** 右地块 x 范围 */
@@ -145,6 +148,41 @@ public class ArenaManager {
     }
 
     private static final Map<String, FighterRef> FIGHTERS = new HashMap<>();
+
+    // ===== 维度存档数据（跨重启记住上次构建尺寸，保证清理不残留） =====
+    public static class ArenaStateData extends WorldSavedData {
+        public static final String NAME = "doth_arena_state";
+        public int builtSize = 0;
+
+        public ArenaStateData(String name) {
+            super(name);
+        }
+
+        public ArenaStateData() {
+            super(NAME);
+        }
+
+        @Override
+        public void readFromNBT(NBTTagCompound nbt) {
+            builtSize = nbt.getInteger("BuiltSize");
+        }
+
+        @Override
+        public NBTTagCompound writeToNBT(NBTTagCompound compound) {
+            compound.setInteger("BuiltSize", builtSize);
+            return compound;
+        }
+    }
+
+    /** 读取/创建斗蛐蛐维度的存档数据（记录上次构建尺寸） */
+    private static ArenaStateData getArenaState(WorldServer arenaWorld) {
+        ArenaStateData data = (ArenaStateData) arenaWorld.loadData(ArenaStateData.class, ArenaStateData.NAME);
+        if (data == null) {
+            data = new ArenaStateData();
+            arenaWorld.setData(ArenaStateData.NAME, data);
+        }
+        return data;
+    }
 
     private static final String TAG_LEFT = "doth_arena_left";
     private static final String TAG_RIGHT = "doth_arena_right";
@@ -228,6 +266,9 @@ public class ArenaManager {
         Biome leftBiome = getBiomeAt(left);
         Biome rightBiome = getBiomeAt(right);
 
+        // 读取上次构建尺寸（跨重启也有效），清理时按并集清除
+        builtSize = getArenaState(arenaWorld).builtSize;
+
         // 清空旧场地（含生物）
         clearArena(arenaWorld);
 
@@ -258,6 +299,12 @@ public class ArenaManager {
         leftTeamName = getTeamName(leftNbt);
         rightTeamName = getTeamName(rightNbt);
         initBossBars();
+
+        // 记录本次构建尺寸到存档
+        builtSize = arenaSize;
+        ArenaStateData state = getArenaState(arenaWorld);
+        state.builtSize = arenaSize;
+        state.markDirty();
         log.info("[DOTH] 斗蛐蛐场地构建完成（{}×{}）", arenaSize, arenaSize);
         return true;
     }
@@ -321,9 +368,17 @@ public class ArenaManager {
                     world.setBlockState(new BlockPos(x, y, z), Blocks.AIR.getDefaultState(), 2);
     }
 
-    /** 清空整个场地区域 + 移除所有非玩家实体（选手、召唤物、残留物品） */
+    /** 清空整个场地区域（新旧尺寸并集，防换尺寸后残留）+ 移除所有非玩家实体 */
     public static void clearArena(WorldServer world) {
-        clearBox(world, leftX1 - 3, Y1 - 3, z1 - 3, rightX2 + 3, Y2 + 6, z2 + 3);
+        // 取“上次实际构建尺寸”与“当前尺寸”的并集，确保缩小时也能清掉旧地块
+        int clearSize = Math.max(arenaSize, builtSize);
+        int cX1 = -4 - (clearSize - 1) - 3;
+        int cX2 = 4 + (clearSize - 1) + 3;
+        int cZ1 = 2 - 3;
+        int cZ2 = 2 + (clearSize - 1) + 3;
+        clearBox(world, cX1, Y1 - 3, cZ1, cX2, Y2 + 6, cZ2);
+        // 旧区域的生物群系残留一并刷回自然群系
+        setChunkBiomes(world, cX1, cZ1, cX2, cZ2, null);
 
         // 清掉所有非玩家实体（选手 + 选手召唤的仆从如恼鬼 + 残留掉落物）
         List<Entity> toRemove = new ArrayList<>();
@@ -427,13 +482,14 @@ public class ArenaManager {
         setChunkBiomes(world, rightX1, z1, rightX2, z2, right);
     }
 
+    /** 刷区块生物群系；biome 为 null 时按坐标刷回自然群系（用于清理残留） */
     private static void setChunkBiomes(WorldServer world, int x1, int z1, int x2, int z2, Biome biome) {
-        byte id = (byte) Biome.getIdForBiome(biome);
         for (int x = x1; x <= x2; x++) {
             for (int z = z1; z <= z2; z++) {
+                Biome b = biome != null ? biome : world.getBiomeProvider().getBiome(new BlockPos(x, 64, z));
                 Chunk chunk = world.getChunkFromBlockCoords(new BlockPos(x, 64, z));
                 byte[] arr = chunk.getBiomeArray();
-                arr[(z & 15) << 4 | (x & 15)] = id;
+                arr[(z & 15) << 4 | (x & 15)] = (byte) Biome.getIdForBiome(b);
                 chunk.setBiomeArray(arr);
             }
         }

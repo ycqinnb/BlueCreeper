@@ -1,0 +1,909 @@
+package yc.ycqin.doth.world;
+
+import net.minecraft.block.Block;
+import net.minecraft.block.state.IBlockState;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityList;
+import net.minecraft.entity.EntityLiving;
+import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.init.Blocks;
+import net.minecraft.init.SoundEvents;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.network.datasync.DataParameter;
+import net.minecraft.network.datasync.DataSerializers;
+import net.minecraft.network.datasync.EntityDataManager;
+import net.minecraft.network.play.server.SPacketTitle;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.SoundCategory;
+import net.minecraft.util.math.AxisAlignedBB;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.text.TextComponentString;
+import net.minecraft.world.BossInfo;
+import net.minecraft.world.BossInfoServer;
+import net.minecraft.world.DimensionType;
+import net.minecraft.world.GameType;
+import net.minecraft.world.World;
+import net.minecraft.world.WorldServer;
+import net.minecraft.world.chunk.Chunk;
+import net.minecraftforge.common.DimensionManager;
+import net.minecraftforge.fml.common.FMLCommonHandler;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import com.dhanantry.scapeandrunparasites.entity.monster.inborn.EntityLodo;
+import yc.ycqin.doth.common.entities.EntityCoin;
+import yc.ycqin.doth.common.entities.EntityRushPowerup;
+import yc.ycqin.doth.network.NetworkHandler;
+import yc.ycqin.doth.network.SPacketRushMount;
+import yc.ycqin.doth.network.SPacketRushState;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * 虫灵快跑：虫灵骑乘跑酷小游戏（仅装载 srparasites 模组时启用）。
+ * - 每条赛道 = 一整块连续跑道（3 车道相连，中间不隔虚空）
+ * - 服务端每 tick 控制虫灵前进，玩家 A/D 通过 CPacketRushInput 控制左右
+ * - 障碍/金币/道具按段实时生成，跑过的清理
+ * - 撞障碍 -2 血（原版虫灵 7 血），死亡或提前下马 → 结算返回
+ */
+public class RushManager {
+
+    private static final Logger log = LogManager.getLogger("DOTH-Rush");
+
+    // ===== 维度注册 =====
+    public static int RUSH_DIM_ID = -1;
+    public static DimensionType DIMENSION_TYPE = null;
+    private static boolean dimensionRegistered = false;
+
+    // ===== 赛道布局 =====
+    /** 跑道方块层 y（5 格厚） */
+    public static final int TRACK_Y1 = 60, TRACK_Y2 = 64;
+    /** 跑道半宽（x 中心 ±6，宽 13 格，3 车道相连） */
+    public static final int TRACK_HALF = 6;
+    /** 相邻赛道中心间距 */
+    public static final int TRACK_SPACING = 16;
+    /** 车道中心（相对赛道中心） */
+    private static final int[] LANES = {-4, 0, 4};
+    /** 出生 z */
+    public static final double START_Z = 2.0D;
+    /** 基础前进速度（格/tick，0.15 = 3 格/秒），随距离递增 */
+    public static final float RUN_SPEED_F = 0.15F;
+    /** 速度递增：每 100 格 +0.15 */
+    private static final double SPEED_RAMP = 0.05D / 100.0D;
+    /** 速度上限（格/tick） */
+    private static final float SPEED_MAX = 100.0F;
+    /** 左右移动速度（格/tick） */
+    public static final double STEER_SPEED = 0.16D;
+    /** 相对赛道中心的 x 限位 */
+    public static final double MAX_X = 5.5D;
+
+    // ===== 虫灵状态（DataWatcher，自动同步客户端） =====
+    public static final byte STATE_NORMAL = 0;   // SRP 原生行为
+    public static final byte STATE_HOLD = 1;     // 倒数中：原地不动
+    public static final byte STATE_RUN = 2;      // 奔跑中：恒定前进 + 左右
+    /** 撞障碍伤害 */
+    public static final int OBSTACLE_DAMAGE = 2;
+    /** 障碍生成概率（每车道每段，基础） */
+    private static final double OBSTACLE_CHANCE = 0.22D;
+    /** 障碍密度递增：每 100 格 +0.05 */
+    private static final double OBSTACLE_RAMP = 0.05D / 100.0D;
+    /** 障碍概率上限 */
+    private static final double OBSTACLE_MAX = 0.75D;
+    /** 金币行生成概率 */
+    private static final double COIN_CHANCE = 0.6D;
+    /** 道具生成概率 */
+    private static final double POWERUP_CHANCE = 0.08D;
+    /** 每段生成间距（z 格） */
+    private static final int SEGMENT_LEN = 8;
+    /** 生成前瞻距离 */
+    private static final double GEN_AHEAD = 48.0D;
+    /** 身后清理距离 */
+    private static final double CLEAN_BEHIND = 24.0D;
+
+    /** 我方比赛实体标签（EntityJoinWorldEvent 白名单用） */
+    public static final String TAG_RUSH = "doth_rush";
+
+    /** 虫灵无敌模式（测试用，/rushdebug invincible on|off） */
+    public static boolean buglinInvincible = false;
+
+    // ===== NBT 键（原位置记录） =====
+    private static final String KEY_ORIG_DIM = "doth_rush_orig_dim";
+    private static final String KEY_ORIG_X = "doth_rush_orig_x";
+    private static final String KEY_ORIG_Y = "doth_rush_orig_y";
+    private static final String KEY_ORIG_Z = "doth_rush_orig_z";
+    private static final String KEY_ORIG_GT = "doth_rush_orig_gametype";
+
+    private static final Random RNG = new Random();
+
+    // ===== 比赛状态 =====
+    public static class RushRun {
+        public EntityPlayerMP player;
+        public int trackIndex;
+        public double centerX;
+        public EntityLivingBase buglin;
+        public BossInfoServer bossBar;
+        public int state;            // 0=倒数 1=进行中 2=已结束
+        public int countdownTicks;
+        public int coins;
+        public int shieldTicks;
+        public double nextGenZ;
+        public int syncTicks;
+        public int mountSyncTicks;
+        public int lastFillZ = 0;
+        public List<BlockPos> obstacles = new ArrayList<>();
+        public List<EntityCoin> coinEntities = new ArrayList<>();
+        public List<EntityRushPowerup> powerupEntities = new ArrayList<>();
+    }
+
+    private static final Map<UUID, RushRun> RUNS = new LinkedHashMap<>();
+    private static final Set<Integer> USED_TRACKS = new HashSet<>();
+
+    // ===== 注册维度 =====
+    public static boolean registerDimension() {
+        if (dimensionRegistered) return true;
+        int baseId = 668;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            int id = baseId + attempt * 100;
+            if (DimensionManager.isDimensionRegistered(id)) {
+                log.warn("[RUSH] 维度ID {} 已被占用，尝试下一个", id);
+                continue;
+            }
+            try {
+                DIMENSION_TYPE = DimensionType.register("DOTH_RUSH_" + id, "_rush" + id, id, RushWorldProvider.class, true);
+                DimensionManager.registerDimension(id, DIMENSION_TYPE);
+                RUSH_DIM_ID = id;
+                dimensionRegistered = true;
+                log.info("[RUSH] 虫灵快跑维度注册成功，ID = {}", id);
+                return true;
+            } catch (Exception e) {
+                log.error("[RUSH] 维度注册失败 ID={}", id, e);
+            }
+        }
+        log.error("[RUSH] 虫灵快跑维度注册失败：3次尝试均被占用");
+        return false;
+    }
+
+    public static boolean isDimensionRegistered() {
+        return dimensionRegistered;
+    }
+
+    public static boolean isRushDimension(World world) {
+        return dimensionRegistered && world != null && world.provider.getDimension() == RUSH_DIM_ID;
+    }
+
+    // ===== 进入 =====
+
+    /**
+     * 玩家右键入场券：分配赛道、传送、生成虫灵、骑乘、开始倒数。
+     * @return 是否成功进入
+     */
+    public static boolean enterRush(EntityPlayerMP player) {
+        if (!dimensionRegistered) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 维度未注册"));
+            return false;
+        }
+        if (player.dimension == RUSH_DIM_ID) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 你已经在赛道上"));
+            return false;
+        }
+
+        MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
+        if (server == null) return false;
+        WorldServer rushWorld = server.getWorld(RUSH_DIM_ID);
+        if (rushWorld == null) return false;
+
+        // 生成 SRP 原版虫灵（EntityList 生成，不直接引用 SRP 类）
+        Entity buglin = EntityList.createEntityByIDFromName(new ResourceLocation("srparasites", "buglin"), rushWorld);
+        if (!(buglin instanceof EntityLivingBase)) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 无法生成虫灵（SRP 未正常装载？）"));
+            return false;
+        }
+
+        // 分配赛道（先到先得，离开释放）
+        int track = -1;
+        for (int i = 0; i < 64; i++) {
+            if (!USED_TRACKS.contains(i)) {
+                track = i;
+                break;
+            }
+        }
+        if (track < 0) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 赛道已满"));
+            return false;
+        }
+
+        RushRun run = new RushRun();
+        run.player = player;
+        run.trackIndex = track;
+        run.centerX = track * TRACK_SPACING;
+        run.state = 0;
+        run.countdownTicks = 3 * 20;
+        run.nextGenZ = START_Z + 8;
+
+        USED_TRACKS.add(track);
+        RUNS.put(player.getUniqueID(), run);
+
+        // 清理该赛道残留（跨会话防残留）
+        clearTrackArea(rushWorld, run);
+        // 补铺出生区跑道方块（该区块可能以前生成过但没有跑道）
+        ensureTrackBlocks(rushWorld, run, 0, 96);
+
+        // 记录原位置/模式
+        NBTTagCompound data = player.getEntityData();
+        data.setInteger(KEY_ORIG_DIM, player.dimension);
+        data.setDouble(KEY_ORIG_X, player.posX);
+        data.setDouble(KEY_ORIG_Y, player.posY);
+        data.setDouble(KEY_ORIG_Z, player.posZ);
+        data.setInteger(KEY_ORIG_GT, player.interactionManager.getGameType().getID());
+
+        // 传送玩家到赛道起点
+        ArenaTeleporter tp = installTeleporter(rushWorld);
+        if (tp != null) tp.setTarget(run.centerX, TRACK_Y2 + 2, START_Z);
+        player.changeDimension(RUSH_DIM_ID);
+        player.connection.setPlayerLocation(run.centerX, TRACK_Y2 + 2, START_Z, 0.0F, 30.0F);
+        player.setGameType(GameType.ADVENTURE);
+
+        // 虫灵（Mixin 已让虫灵可骑乘；移动由 Mixin travel 接管，无需手动 setPosition）
+        EntityLivingBase lodo = (EntityLivingBase) buglin;
+        lodo.setNoGravity(true);
+        lodo.setHealth(lodo.getMaxHealth());
+        lodo.addTag(TAG_RUSH);
+        lodo.setPosition(run.centerX, TRACK_Y2 + 1, START_Z);
+        lodo.rotationYaw = 0.0F;
+        rushWorld.spawnEntity(lodo);
+        run.buglin = lodo;
+        setRushState(lodo, STATE_HOLD); // 倒数中原地不动
+
+        // 骑乘 + 手动补发乘客状态（保险）
+        if (!player.startRiding(lodo, true)) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 骑乘虫灵失败"));
+            endGame(run, "骑乘失败");
+            return false;
+        }
+        player.connection.sendPacket(new net.minecraft.network.play.server.SPacketSetPassengers(lodo));
+
+        // Boss 血条（玩家名 + 虫灵）
+        run.bossBar = new BossInfoServer(
+                new TextComponentString("§c" + player.getName() + " 的虫灵"),
+                BossInfo.Color.RED, BossInfo.Overlay.PROGRESS);
+        run.bossBar.addPlayer(player);
+        run.bossBar.setPercent(lodo.getHealth() / Math.max(1.0F, lodo.getMaxHealth()));
+
+        // 通知客户端（维度 id + 激活 HUD）
+        NetworkHandler.INSTANCE.sendTo(new SPacketRushState(RUSH_DIM_ID, 0, 0, 0, true), player);
+
+        player.sendMessage(new TextComponentString("§e[虫灵快跑] 骑上虫灵，3、2、1 后出发！A/D 左右移动，Shift 下区即弃权"));
+        sendTitle(player, "§l§6虫灵快跑", "§7" + player.getName());
+        log.info("[RUSH] {} 进入赛道 {}，中心 x={}", player.getName(), track, run.centerX);
+        return true;
+    }
+
+    /** 强制铺设指定 z 范围内的跑道方块（补以前生成过的空区块） */
+    private static void ensureTrackBlocks(WorldServer world, RushRun run, int zStart, int zEnd) {
+        int cx1 = (int) Math.floor(run.centerX - TRACK_HALF);
+        int cx2 = (int) Math.floor(run.centerX + TRACK_HALF);
+        for (int x = cx1; x <= cx2; x++) {
+            for (int z = zStart; z <= zEnd; z++) {
+                for (int y = TRACK_Y1; y <= TRACK_Y2; y++) {
+                    world.setBlockState(new BlockPos(x, y, z), Blocks.STONE.getDefaultState(), 2);
+                }
+            }
+        }
+    }
+
+    /** 清理指定赛道范围内的残留（实体 + 障碍层方块），防跨会话残留 */
+    private static void clearTrackArea(WorldServer world, RushRun run) {
+        double cx1 = run.centerX - TRACK_HALF - 1;
+        double cx2 = run.centerX + TRACK_HALF + 1;
+        for (Entity e : new ArrayList<>(world.loadedEntityList)) {
+            if (!(e instanceof EntityPlayer)) {
+                AxisAlignedBB bb = e.getEntityBoundingBox();
+                if (bb.minX >= cx1 && bb.maxX <= cx2) {
+                    e.setDead();
+                }
+            }
+        }
+        for (Chunk chunk : world.getChunkProvider().getLoadedChunks()) {
+            int cwx = chunk.x * 16;
+            int cwz = chunk.z * 16;
+            if (cwz + 15 < 0) continue;
+            if (cwx + 15 < cx1 || cwx > cx2) continue;
+            int startX = (int) Math.max(cx1, cwx);
+            int endX = (int) Math.min(cx2, cwx + 15);
+            int startZ = Math.max(0, cwz);
+            int endZ = cwz + 15;
+            for (int x = startX; x <= endX; x++) {
+                for (int z = startZ; z <= endZ; z++) {
+                    for (int y = TRACK_Y2 + 1; y <= TRACK_Y2 + 3; y++) {
+                        world.setBlockState(new BlockPos(x, y, z), Blocks.AIR.getDefaultState(), 2);
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== 传送器接管（复用斗蛐蛐的 ArenaTeleporter） =====
+    private static ArenaTeleporter installTeleporter(WorldServer world) {
+        if (world == null) return null;
+        if (world.getDefaultTeleporter() instanceof ArenaTeleporter) {
+            return (ArenaTeleporter) world.getDefaultTeleporter();
+        }
+        try {
+            java.lang.reflect.Field f;
+            try {
+                f = WorldServer.class.getDeclaredField("worldTeleporter");
+            } catch (NoSuchFieldException e) {
+                f = WorldServer.class.getDeclaredField("field_85177_Q");
+            }
+            f.setAccessible(true);
+            java.lang.reflect.Field mod = java.lang.reflect.Field.class.getDeclaredField("modifiers");
+            mod.setAccessible(true);
+            mod.setInt(f, f.getModifiers() & ~java.lang.reflect.Modifier.FINAL);
+            ArenaTeleporter tp = new ArenaTeleporter(world);
+            f.set(world, tp);
+            return tp;
+        } catch (Exception e) {
+            log.error("[RUSH] 替换世界传送器失败", e);
+            return null;
+        }
+    }
+
+    // ===== 每 tick 逻辑（ServerTickEvent 调用） =====
+    public static void onServerTick() {
+        if (!dimensionRegistered) return;
+        MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
+        if (server == null) return;
+        WorldServer rushWorld = server.getWorld(RUSH_DIM_ID);
+        if (rushWorld == null) return;
+
+        if (!RUNS.isEmpty()) {
+            rushWorld.setWorldTime(6000);
+        }
+
+        // 兜底：在维度里但没有比赛的玩家（/tp 进来的）→ 送回
+        for (EntityPlayerMP p : new ArrayList<>(server.getPlayerList().getPlayers())) {
+            if (p.dimension == RUSH_DIM_ID && !RUNS.containsKey(p.getUniqueID())) {
+                returnPlayer(p);
+            }
+        }
+
+        // 虚空保护
+        for (EntityPlayerMP p : new ArrayList<>(server.getPlayerList().getPlayers())) {
+            if (p.dimension == RUSH_DIM_ID && p.posY < 40) {
+                RushRun run = RUNS.get(p.getUniqueID());
+                double x = run != null ? run.buglin.posX : 0;
+                double z = run != null ? run.buglin.posZ : START_Z;
+                p.connection.setPlayerLocation(x, TRACK_Y2 + 2, z, p.rotationYaw, p.rotationPitch);
+            }
+        }
+
+        // 遍历副本：endGame 内部会直接 RUNS.remove，不能在迭代中再 remove（会 CME）
+        for (RushRun run : new ArrayList<>(RUNS.values())) {
+            if (run.state == 2) continue; // 已结束（可能是其他路径先结束了）
+            tickRun(run);
+        }
+    }
+
+    /** @return true = 比赛结束（从 RUNS 移除） */
+    private static boolean tickRun(RushRun run) {
+        EntityPlayerMP player = run.player;
+        if (player == null || player.isDead || !player.connection.getNetworkManager().isChannelOpen()) {
+            endGame(run, "玩家离线");
+            return true;
+        }
+        if (run.buglin == null || run.buglin.isDead) {
+            endGame(run, "虫灵死亡");
+            return true;
+        }
+        // 提前下马（shift）→ 游戏结束
+        if (player.getRidingEntity() != run.buglin) {
+            endGame(run, "提前下区");
+            return true;
+        }
+        // 骑手按 shift（潜行，服务端状态已同步）→ 主动下马 = 游戏结束
+        if (player.isSneaking()) {
+            player.dismountRidingEntity();
+            endGame(run, "提前下区");
+            return true;
+        }
+
+        // 血条同步
+        if (run.bossBar != null) {
+            run.bossBar.setPercent(run.buglin.getHealth() / Math.max(1.0F, run.buglin.getMaxHealth()));
+        }
+
+        // 倒数
+        if (run.state == 0) {
+            run.countdownTicks--;
+            if (run.countdownTicks % 20 == 0) {
+                int sec = (run.countdownTicks + 19) / 20;
+                if (sec >= 1 && sec <= 3) {
+                    sendTitle(player, "§l§6" + sec, "");
+                }
+            }
+            if (run.countdownTicks <= 0) {
+                run.state = 1;
+                setRushState(run.buglin, STATE_RUN);
+                sendTitle(player, "§l§a出发！", "");
+            }
+            return false;
+        }
+
+        if (run.state != 1) return false;
+
+        // ===== 虫灵由 Mixin travel() 驱动（恒定前进 + 左右），这里只做判定/生成 =====
+        if (run.shieldTicks > 0) run.shieldTicks--;
+
+        double nz = run.buglin.posZ;
+        double nx = run.buglin.posX;
+
+        // ===== 分段生成 =====
+        while (run.nextGenZ < nz + GEN_AHEAD) {
+            generateSegment(run, (int) run.nextGenZ);
+            run.nextGenZ += SEGMENT_LEN;
+        }
+
+        // ===== 持续补铺跑道（防区块生成时机导致跑道缺块/一条一条） =====
+        if (run.lastFillZ <= (int) nz + 40) {
+            int fillTo = (int) nz + 40;
+            int cx1 = (int) Math.floor(run.centerX - TRACK_HALF);
+            int cx2 = (int) Math.floor(run.centerX + TRACK_HALF);
+            WorldServer w = rushWorld(run);
+            if (w != null) {
+                for (int x = cx1; x <= cx2; x++) {
+                    for (int z = run.lastFillZ; z <= fillTo; z++) {
+                        for (int y = TRACK_Y1; y <= TRACK_Y2; y++) {
+                            w.setBlockState(new BlockPos(x, y, z), Blocks.STONE.getDefaultState(), 2);
+                        }
+                    }
+                }
+            }
+            run.lastFillZ = fillTo + 1;
+        }
+
+        // ===== 障碍判定：提前移除靠近的障碍（物理碰撞前），撞上掉血并继续前进 =====
+        BlockPos hitPos = findNearObstacle(run, nx, nz);
+        if (hitPos != null) {
+            if (run.shieldTicks > 0) {
+                run.shieldTicks = 0;
+                player.sendMessage(new TextComponentString("§b[虫灵快跑] 护盾抵挡了碰撞！"));
+            } else if (buglinInvincible) {
+                // 无敌模式：不掉血
+                player.sendMessage(new TextComponentString("§7[虫灵快跑] 无敌模式，碰撞免疫"));
+            } else {
+                float hp = run.buglin.getHealth() - OBSTACLE_DAMAGE;
+                run.buglin.setHealth(Math.max(0.0F, hp));
+                player.sendMessage(new TextComponentString("§c[虫灵快跑] 撞上障碍 -" + OBSTACLE_DAMAGE + " 血"));
+            }
+            removeObstacleBlock(run, hitPos);
+            if (run.buglin.getHealth() <= 0.0F) {
+                endGame(run, "虫灵死亡");
+                return true;
+            }
+        }
+
+        // ===== 客户端同步（防 tracker 不可靠）：每 tick 强制虫灵位置 + 每 20 tick 重申骑乘 =====
+        player.connection.sendPacket(new net.minecraft.network.play.server.SPacketEntityTeleport(run.buglin));
+        if (++run.mountSyncTicks >= 20) {
+            run.mountSyncTicks = 0;
+            NetworkHandler.INSTANCE.sendTo(new SPacketRushMount(run.buglin.getEntityId(), true), player);
+        }
+
+        // ===== 金币/道具收集 =====
+        collectEntities(run);
+
+        // ===== 身后清理 =====
+        cleanupBehind(run, nz);
+
+        // ===== 分数同步（每秒） =====
+        if (++run.syncTicks >= 20) {
+            run.syncTicks = 0;
+            int dist = (int) Math.max(0, nz - START_Z);
+            int score = dist + run.coins * 10;
+            NetworkHandler.INSTANCE.sendTo(new SPacketRushState(RUSH_DIM_ID, score, run.coins, dist, true), player);
+        }
+        return false;
+    }
+
+    private static WorldServer rushWorld(RushRun run) {
+        MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
+        return server != null ? server.getWorld(RUSH_DIM_ID) : null;
+    }
+
+    // ===== 分段生成 =====
+    private static void generateSegment(RushRun run, int segZ) {
+        WorldServer world = rushWorld(run);
+        if (world == null) return;
+        double cx = run.centerX;
+
+        // 越往后障碍越密集（随距离提升概率）
+        double dist = Math.max(0.0D, segZ - START_Z);
+        double obstacleChance = Math.min(OBSTACLE_MAX, OBSTACLE_CHANCE + dist * OBSTACLE_RAMP);
+
+        // 障碍：随机分布在整条跑道（相对中心 -5~+5），数量随距离递增（1~3 个）
+        int obstacleCount = 1;
+        if (RNG.nextDouble() < obstacleChance) obstacleCount++;
+        if (RNG.nextDouble() < obstacleChance * 0.5D) obstacleCount++;
+        obstacleCount = Math.min(3, obstacleCount);
+        Set<Integer> usedX = new HashSet<>();
+        int placed = 0;
+        int tries = 0;
+        while (placed < obstacleCount && tries < 20) {
+            tries++;
+            int laneX = (int) cx + RNG.nextInt(11) - 5; // cx-5 .. cx+5
+            if (!usedX.add(laneX)) continue;
+            placed++;
+            // 障碍：2 格高，坐在跑道上
+            BlockPos p1 = new BlockPos(laneX, TRACK_Y2 + 1, segZ);
+            BlockPos p2 = new BlockPos(laneX, TRACK_Y2 + 2, segZ);
+            world.setBlockState(p1, Blocks.OBSIDIAN.getDefaultState(), 2);
+            world.setBlockState(p2, Blocks.OBSIDIAN.getDefaultState(), 2);
+            run.obstacles.add(p1);
+            run.obstacles.add(p2);
+        }
+
+        // 金币行（随机 x，3 个）——y 与虫灵同层，确保能吃到
+        if (RNG.nextDouble() < COIN_CHANCE) {
+            int coinX = (int) cx + RNG.nextInt(11) - 5;
+            for (int k = 1; k <= 3; k++) {
+                EntityCoin coin = new EntityCoin(world);
+                coin.addTag(TAG_RUSH);
+                coin.setPosition(coinX, TRACK_Y2 + 1.5D, segZ + k);
+                world.spawnEntity(coin);
+                run.coinEntities.add(coin);
+            }
+        }
+
+        // 道具（随机 x）
+        if (RNG.nextDouble() < POWERUP_CHANCE) {
+            EntityRushPowerup pu = new EntityRushPowerup(world);
+            pu.addTag(TAG_RUSH);
+            pu.setType(RNG.nextInt(3));
+            pu.setPosition((int) cx + RNG.nextInt(11) - 5, TRACK_Y2 + 1.5D, segZ + 4);
+            world.spawnEntity(pu);
+            run.powerupEntities.add(pu);
+        }
+    }
+
+    // ===== 障碍判定：找虫灵前方/身侧 1.5 格内的障碍（提前移除，防物理卡住） =====
+    private static BlockPos findNearObstacle(RushRun run, double nx, double nz) {
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (BlockPos p : run.obstacles) {
+            if (p.getZ() < nz - 0.5D || p.getZ() > nz + 1.5D) continue;
+            double dx = p.getX() + 0.5D - nx;
+            if (Math.abs(dx) > 1.0D) continue;
+            double d = dx * dx;
+            if (d < bestDist) {
+                bestDist = d;
+                best = p;
+            }
+        }
+        return best;
+    }
+
+    private static void removeObstacleBlock(RushRun run, BlockPos pos) {
+        World world = rushWorld(run);
+        if (world == null) return;
+        world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
+        // 同列的上下块一起清（2 格高障碍）
+        world.setBlockState(pos.up(), Blocks.AIR.getDefaultState(), 2);
+        world.setBlockState(pos.down(), Blocks.AIR.getDefaultState(), 2);
+        run.obstacles.remove(pos);
+        run.obstacles.remove(pos.up());
+        run.obstacles.remove(pos.down());
+    }
+
+    private static void collectEntities(RushRun run) {
+        World world = rushWorld(run);
+        if (world == null) return;
+        EntityLivingBase buglin = run.buglin;
+        AxisAlignedBB box = buglin.getEntityBoundingBox().grow(0.5D, 0.5D, 0.5D);
+
+        Iterator<EntityCoin> cit = run.coinEntities.iterator();
+        while (cit.hasNext()) {
+            EntityCoin coin = cit.next();
+            if (coin.isDead) {
+                cit.remove();
+                continue;
+            }
+            if (coin.getEntityBoundingBox().intersects(box)) {
+                coin.setDead();
+                cit.remove();
+                run.coins++;
+                world.playSound(null, coin.getPosition(), SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP,
+                        SoundCategory.PLAYERS, 0.6F, 1.2F);
+            }
+        }
+
+        Iterator<EntityRushPowerup> pit = run.powerupEntities.iterator();
+        while (pit.hasNext()) {
+            EntityRushPowerup pu = pit.next();
+            if (pu.isDead) {
+                pit.remove();
+                continue;
+            }
+            if (pu.getEntityBoundingBox().intersects(box)) {
+                pu.setDead();
+                pit.remove();
+                applyPowerup(run, pu.getType());
+            }
+        }
+    }
+
+    private static void applyPowerup(RushRun run, int type) {
+        switch (type) {
+            case 0:
+                run.shieldTicks = 200;
+                run.player.sendMessage(new TextComponentString("§b[虫灵快跑] 获得护盾！"));
+                break;
+            case 1:
+                float hp = Math.min(run.buglin.getMaxHealth(), run.buglin.getHealth() + 3.0F);
+                run.buglin.setHealth(hp);
+                run.player.sendMessage(new TextComponentString("§a[虫灵快跑] 回复 3 点血！"));
+                break;
+            default:
+                // 加速：给虫灵速度药水效果（原版移动会按效果加成）
+                run.buglin.addPotionEffect(new net.minecraft.potion.PotionEffect(
+                        net.minecraft.init.MobEffects.SPEED, 100, 0, false, false));
+                run.player.sendMessage(new TextComponentString("§e[虫灵快跑] 加速！"));
+                break;
+        }
+    }
+
+    // ===== 身后清理 =====
+    private static void cleanupBehind(RushRun run, double nz) {
+        World world = rushWorld(run);
+        if (world == null) return;
+        double behind = nz - CLEAN_BEHIND;
+
+        Iterator<BlockPos> oit = run.obstacles.iterator();
+        while (oit.hasNext()) {
+            BlockPos p = oit.next();
+            if (p.getZ() < behind) {
+                world.setBlockState(p, Blocks.AIR.getDefaultState(), 2);
+                oit.remove();
+            }
+        }
+        Iterator<EntityCoin> cit = run.coinEntities.iterator();
+        while (cit.hasNext()) {
+            EntityCoin coin = cit.next();
+            if (coin.posZ < behind) {
+                coin.setDead();
+                cit.remove();
+            }
+        }
+        Iterator<EntityRushPowerup> pit = run.powerupEntities.iterator();
+        while (pit.hasNext()) {
+            EntityRushPowerup pu = pit.next();
+            if (pu.posZ < behind) {
+                pu.setDead();
+                pit.remove();
+            }
+        }
+    }
+
+    // ===== 结束 =====
+    private static void endGame(RushRun run, String reason) {
+        if (run.state == 2) return;
+        run.state = 2;
+
+        int dist = (int) Math.max(0, run.buglin != null ? run.buglin.posZ - START_Z : 0);
+        int score = dist + run.coins * 10;
+        sendTitle(run.player, "§l§6游戏结束！", "§e得分 " + score + "  §7距离 " + dist + "m  金币 " + run.coins);
+        run.player.sendMessage(new TextComponentString("§e[虫灵快跑] 结算：距离 " + dist + "m + 金币 " + run.coins + "×10 = §6得分 " + score));
+
+        NetworkHandler.INSTANCE.sendTo(new SPacketRushState(RUSH_DIM_ID, score, run.coins, dist, false), run.player);
+
+        // 清理：虫灵/金币/道具/障碍
+        World world = rushWorld(run);
+        if (world != null) {
+            if (run.buglin != null) {
+                run.buglin.setDead();
+            }
+            for (EntityCoin coin : run.coinEntities) {
+                if (!coin.isDead) coin.setDead();
+            }
+            for (EntityRushPowerup pu : run.powerupEntities) {
+                if (!pu.isDead) pu.setDead();
+            }
+            for (BlockPos p : run.obstacles) {
+                world.setBlockState(p, Blocks.AIR.getDefaultState(), 2);
+            }
+        }
+        if (run.bossBar != null) {
+            run.bossBar.removePlayer(run.player);
+            run.bossBar = null;
+        }
+        // 客户端解除骑乘
+        NetworkHandler.INSTANCE.sendTo(new SPacketRushMount(-1, false), run.player);
+
+        USED_TRACKS.remove(run.trackIndex);
+        RUNS.remove(run.player.getUniqueID());
+        returnPlayer(run.player);
+        log.info("[RUSH] {} 比赛结束（{}），得分 {}", run.player.getName(), reason, score);
+    }
+
+    /** 玩家回原位置，恢复游戏模式 */
+    private static void returnPlayer(EntityPlayerMP player) {
+        if (player.dimension == RUSH_DIM_ID) {
+            NBTTagCompound data = player.getEntityData();
+            int origDim = data.getInteger(KEY_ORIG_DIM);
+            double x = data.getDouble(KEY_ORIG_X);
+            double y = data.getDouble(KEY_ORIG_Y);
+            double z = data.getDouble(KEY_ORIG_Z);
+            int gt = data.getInteger(KEY_ORIG_GT);
+
+            if (origDim == RUSH_DIM_ID || (origDim == 0 && x == 0 && z == 0)) {
+                origDim = 0;
+                BlockPos spawn = player.world.getSpawnPoint();
+                x = spawn.getX() + 0.5;
+                y = spawn.getY();
+                z = spawn.getZ() + 0.5;
+            }
+            WorldServer target = player.getServer().getWorld(origDim);
+            if (target != null) {
+                net.minecraft.world.Teleporter original = target.getDefaultTeleporter();
+                ArenaTeleporter tp = installTeleporter(target);
+                if (tp != null) tp.setTarget(x, y, z);
+                player.changeDimension(origDim);
+                if (target.getDefaultTeleporter() instanceof ArenaTeleporter) {
+                    try {
+                        java.lang.reflect.Field f;
+                        try {
+                            f = WorldServer.class.getDeclaredField("worldTeleporter");
+                        } catch (NoSuchFieldException e) {
+                            f = WorldServer.class.getDeclaredField("field_85177_Q");
+                        }
+                        f.setAccessible(true);
+                        java.lang.reflect.Field mod = java.lang.reflect.Field.class.getDeclaredField("modifiers");
+                        mod.setAccessible(true);
+                        mod.setInt(f, f.getModifiers() & ~java.lang.reflect.Modifier.FINAL);
+                        f.set(target, original);
+                    } catch (Exception ignored) {
+                    }
+                }
+            } else {
+                player.changeDimension(origDim);
+            }
+            player.connection.setPlayerLocation(x, y, z, player.rotationYaw, player.rotationPitch);
+            player.setGameType(GameType.getByID(gt));
+            player.sendMessage(new TextComponentString("§a[虫灵快跑] 已传送回原位置"));
+        }
+    }
+
+    // ===== 虫灵状态（DataWatcher，自动同步客户端；Mixin 在 entityInit 里注册这个 key） =====
+    // 懒加载：避免在未装 SRP 时直接引用 EntityLodo 类导致类加载失败
+    private static DataParameter<Byte> rushStateKey = null;
+
+    public static DataParameter<Byte> getRushStateKey() {
+        if (rushStateKey == null) {
+            rushStateKey = EntityDataManager.createKey(EntityLodo.class, DataSerializers.BYTE);
+        }
+        return rushStateKey;
+    }
+
+    public static void setRushState(EntityLivingBase buglin, byte state) {
+        if (buglin != null) {
+            buglin.getDataManager().set(getRushStateKey(), state);
+        }
+    }
+
+    /** 当前奔跑速度：基础 + 距离递增（每 100 格 +0.05，上限 1.0），加速道具加成 */
+    public static float getRunSpeed(EntityLivingBase buglin) {
+        if (buglin == null) return RUN_SPEED_F;
+        double dist = Math.max(0.0D, buglin.posZ - START_Z);
+        float spd = (float) Math.min(SPEED_MAX, RUN_SPEED_F + dist * SPEED_RAMP);
+        if (buglin.isPotionActive(net.minecraft.init.MobEffects.SPEED)) {
+            spd *= 1.0F + 0.2F * (buglin.getActivePotionEffect(net.minecraft.init.MobEffects.SPEED).getAmplifier() + 1);
+        }
+        return spd;
+    }
+
+    /** 左右转向限位：虫灵不会跑出自己赛道范围（ASM travel 调用） */
+    public static float steerFor(Entity buglin, float strafe) {
+        for (RushRun run : RUNS.values()) {
+            if (run.buglin == buglin) {
+                double next = buglin.posX + strafe * getRunSpeed((EntityLivingBase) buglin);
+                if (next < run.centerX - MAX_X || next > run.centerX + MAX_X) {
+                    return 0.0F;
+                }
+                return strafe;
+            }
+        }
+        return strafe;
+    }
+
+    // ===== 供区块生成器查询 =====
+    public static List<double[]> getActiveTrackCenters() {
+        List<double[]> list = new ArrayList<>();
+        for (RushRun run : RUNS.values()) {
+            list.add(new double[]{run.centerX, run.trackIndex});
+        }
+        return list;
+    }
+
+    // ===== Title =====
+    public static void sendTitle(EntityPlayerMP player, String title, String subtitle) {
+        player.connection.sendPacket(new SPacketTitle(SPacketTitle.Type.TITLE,
+                new TextComponentString(title)));
+        if (subtitle != null && !subtitle.isEmpty()) {
+            player.connection.sendPacket(new SPacketTitle(SPacketTitle.Type.SUBTITLE,
+                    new TextComponentString(subtitle)));
+        }
+    }
+
+    // ===== 维度守卫事件 =====
+
+    /** 维度内禁止非比赛实体生成（防 SRP 刷怪/进化产物/野怪）。只服务端生效——客户端实体 tag 不同步，会误拦虫灵 */
+    @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+    public static void onEntityJoinWorld(net.minecraftforge.event.entity.EntityJoinWorldEvent event) {
+        if (event.getWorld().isRemote) return; // 客户端不拦截（tag 不同步）
+        if (!isRushDimension(event.getWorld())) return;
+        Entity e = event.getEntity();
+        if (e instanceof net.minecraft.entity.player.EntityPlayer) return;
+        if (e.getTags().contains(TAG_RUSH)) return;
+        event.setCanceled(true);
+    }
+
+    /** 维度内玩家免疫伤害；虫灵本体也免伤（防窒息等杂伤，比赛伤害走 setHealth） */
+    @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+    public static void onLivingHurt(net.minecraftforge.event.entity.living.LivingHurtEvent event) {
+        if (!isRushDimension(event.getEntity().world)) return;
+        if (event.getEntity() instanceof EntityPlayerMP) {
+            event.setCanceled(true);
+        } else if (event.getEntity().getTags().contains(TAG_RUSH)) {
+            event.setCanceled(true);
+        }
+    }
+
+    /** 维度内玩家死亡（/kill 等）→ 取消并结束比赛 */
+    @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+    public static void onLivingDeath(net.minecraftforge.event.entity.living.LivingDeathEvent event) {
+        if (event.getEntity() instanceof EntityPlayerMP && isRushDimension(event.getEntity().world)) {
+            RushRun run = RUNS.get(event.getEntity().getUniqueID());
+            if (run != null) {
+                event.setCanceled(true);
+                endGame(run, "玩家死亡");
+            }
+        }
+    }
+
+    /** 维度内禁止破坏/放置方块 */
+    @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+    public static void onBlockBreak(net.minecraftforge.event.world.BlockEvent.BreakEvent event) {
+        if (event.getPlayer() instanceof EntityPlayerMP && isRushDimension(event.getWorld())) {
+            event.setCanceled(true);
+        }
+    }
+
+    @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+    public static void onBlockPlace(net.minecraftforge.event.world.BlockEvent.PlaceEvent event) {
+        if (event.getPlayer() instanceof EntityPlayerMP && isRushDimension(event.getWorld())) {
+            event.setCanceled(true);
+        }
+    }
+
+    /** 玩家离线 → 结束比赛 */
+    @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+    public static void onPlayerLoggedOut(net.minecraftforge.fml.common.gameevent.PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.player instanceof EntityPlayerMP) {
+            RushRun run = RUNS.get(event.player.getUniqueID());
+            if (run != null) {
+                endGame(run, "玩家离线");
+            }
+        }
+    }
+}

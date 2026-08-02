@@ -19,6 +19,7 @@ public class ItemReg {
     public static final CameraItem CAMERA = new CameraItem();
     public static final BioPhotoItem BIO_PHOTO = new BioPhotoItem();
     public static final CompressedClipItem COMPRESSED_CLIP = new CompressedClipItem();
+    public static final ItemRushTicket RUSH_TICKET = new ItemRushTicket();
 
     public ItemReg() {
         MinecraftForge.EVENT_BUS.register(this);
@@ -32,5 +33,9 @@ public class ItemReg {
                 BIO_PHOTO,
                 COMPRESSED_CLIP
         );
+        // 虫灵快跑：仅在装载 srparasites 模组时注册入场券
+        if (net.minecraftforge.fml.common.Loader.isModLoaded("srparasites")) {
+            event.getRegistry().register(RUSH_TICKET);
+        }
     }
 }

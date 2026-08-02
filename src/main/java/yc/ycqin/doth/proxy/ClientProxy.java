@@ -8,12 +8,17 @@ import net.minecraftforge.fml.client.registry.RenderingRegistry;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import yc.ycqin.doth.client.DOTHKeyBind;
+import yc.ycqin.doth.client.render.entity.RenderEntityCoin;
 import yc.ycqin.doth.client.render.entity.RenderEntityItemSwordHighlight;
+import yc.ycqin.doth.client.render.entity.RenderEntityPowerup;
 import yc.ycqin.doth.client.render.shader.ShaderHelper;
+import yc.ycqin.doth.common.entities.EntityCoin;
 import yc.ycqin.doth.common.entities.EntityItemSwordHighlight;
+import yc.ycqin.doth.common.entities.EntityRushPowerup;
 import yc.ycqin.doth.common.item.ModelReg;
 import yc.ycqin.doth.event.ClientEvent;
 import yc.ycqin.doth.event.EntityHighlightHandler;
+import yc.ycqin.doth.event.RushClientHandler;
 
 import java.util.Map;
 
@@ -27,8 +32,18 @@ public class ClientProxy extends CommonProxy {
                 EntityItemSwordHighlight.class,
                 new RenderEntityItemSwordHighlight.Factory()
         );
+        // 虫灵快跑实体渲染
+        RenderingRegistry.registerEntityRenderingHandler(
+                EntityCoin.class,
+                new RenderEntityCoin.Factory()
+        );
+        RenderingRegistry.registerEntityRenderingHandler(
+                EntityRushPowerup.class,
+                new RenderEntityPowerup.Factory()
+        );
         MinecraftForge.EVENT_BUS.register(new ClientEvent());
         MinecraftForge.EVENT_BUS.register(new EntityHighlightHandler());
+        MinecraftForge.EVENT_BUS.register(new RushClientHandler());
         new ModelReg();
         ShaderHelper.initShaders();
     }

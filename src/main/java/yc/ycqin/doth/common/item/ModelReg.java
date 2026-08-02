@@ -17,6 +17,10 @@ public class ModelReg {
         registerModel(ItemReg.BLUE_CREEPER_SWORD);
         registerModel(ItemReg.CAMERA);
         registerModel(ItemReg.BIO_PHOTO);
+        // 虫灵快跑入场券（仅 SRP 装载时注册了物品）
+        if (net.minecraftforge.fml.common.Loader.isModLoaded("srparasites")) {
+            registerModel(ItemReg.RUSH_TICKET);
+        }
         // compressed_clip 有 subtypes，需要逐个注册
         for (int i = 0; i <= CompressedClipItem.MAX_LEVEL; i++) {
             ModelLoader.setCustomModelResourceLocation(ItemReg.COMPRESSED_CLIP, i,

@@ -2,6 +2,7 @@ package yc.ycqin.doth;
 
 import net.minecraft.entity.Entity;
 import net.minecraft.init.Blocks;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.registry.EntityRegistry;
@@ -13,8 +14,13 @@ import net.minecraftforge.fml.common.event.FMLServerStartingEvent;
 import net.minecraftforge.fml.common.event.FMLServerStoppedEvent;
 import org.apache.logging.log4j.Logger;
 import yc.ycqin.doth.command.CommandAllreturn;
+import yc.ycqin.doth.command.CommandRushDebug;
 import yc.ycqin.doth.common.block.BlockReg;
+import yc.ycqin.doth.common.entities.EntityCoin;
 import yc.ycqin.doth.common.entities.EntityItemSwordHighlight;
+import yc.ycqin.doth.common.entities.EntityRushPowerup;
+import yc.ycqin.doth.common.item.ItemReg;
+import yc.ycqin.doth.common.item.RecipeBuglinTicket;
 import yc.ycqin.doth.core.ProtectHelper;
 import yc.ycqin.doth.event.ArenaFriendlyFireHandler;
 import yc.ycqin.doth.event.BlockHighlightHandler;
@@ -22,8 +28,11 @@ import yc.ycqin.doth.event.PhotoCleanupHandler;
 import yc.ycqin.doth.event.SwordMagnetHandler;
 import yc.ycqin.doth.proxy.CommonProxy;
 import yc.ycqin.doth.world.ArenaManager;
+import yc.ycqin.doth.world.RushManager;
 
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.common.Loader;
+import net.minecraftforge.fml.common.registry.GameRegistry;
 import yc.ycqin.doth.core.DOTHConfig;
 import yc.ycqin.doth.core.DOTHEventBus;
 
@@ -66,6 +75,18 @@ public class DOTHMod
                 "SwordHighlight", eid++,
                 instance, 64, 20, true
         );
+        EntityRegistry.registerModEntity(
+                new ResourceLocation(MODID, "rush_coin"),
+                EntityCoin.class,
+                "RushCoin", eid++,
+                instance, 64, 1, true
+        );
+        EntityRegistry.registerModEntity(
+                new ResourceLocation(MODID, "rush_powerup"),
+                EntityRushPowerup.class,
+                "RushPowerup", eid++,
+                instance, 64, 1, true
+        );
     }
 
     @EventHandler
@@ -86,12 +107,31 @@ public class DOTHMod
         MinecraftForge.EVENT_BUS.register(new ArenaFriendlyFireHandler());
         // 注册斗蛐蛐每 tick 逻辑
         MinecraftForge.EVENT_BUS.register(new ArenaTickHandler());
+
+        // ===== 虫灵快跑（仅 SRP 装载时） =====
+        if (Loader.isModLoaded("srparasites")) {
+            // 维度
+            RushManager.registerDimension();
+            // 入场券配方（2 鞍 + 含虫灵照片，NBT Ingredient 匹配）
+            GameRegistry.addShapelessRecipe(
+                    new ResourceLocation(MODID, "rush_ticket"),
+                    new ResourceLocation("doth_rush"),
+                    new ItemStack(ItemReg.RUSH_TICKET),
+                    net.minecraft.item.crafting.Ingredient.fromItem(net.minecraft.init.Items.SADDLE),
+                    net.minecraft.item.crafting.Ingredient.fromItem(net.minecraft.init.Items.SADDLE),
+                    new RecipeBuglinTicket.BuglinPhotoIngredient());
+        }
+        // 维度守卫事件（维度未注册时全部空转，无影响）
+        MinecraftForge.EVENT_BUS.register(RushManager.class);
+        // 每 tick 逻辑
+        MinecraftForge.EVENT_BUS.register(new RushTickHandler());
         proxy.init(event);
     }
 
-    @EventHandler
+        @EventHandler
     public void onServerStarting(FMLServerStartingEvent event) {
         event.registerServerCommand(new CommandAllreturn());
+        event.registerServerCommand(new CommandRushDebug());
     }
 
     /** 斗蛐蛐维度每 tick 逻辑 */
@@ -100,6 +140,16 @@ public class DOTHMod
         public void onServerTick(net.minecraftforge.fml.common.gameevent.TickEvent.ServerTickEvent event) {
             if (event.phase == net.minecraftforge.fml.common.gameevent.TickEvent.Phase.END) {
                 ArenaManager.onServerTick();
+            }
+        }
+    }
+
+    /** 虫灵快跑每 tick 逻辑 */
+    public static class RushTickHandler {
+        @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+        public void onServerTick(net.minecraftforge.fml.common.gameevent.TickEvent.ServerTickEvent event) {
+            if (event.phase == net.minecraftforge.fml.common.gameevent.TickEvent.Phase.END) {
+                RushManager.onServerTick();
             }
         }
     }

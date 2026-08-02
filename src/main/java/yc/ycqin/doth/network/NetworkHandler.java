@@ -24,5 +24,7 @@ public class NetworkHandler {
         INSTANCE.registerMessage(PacketFindAllStructures.Handler.class, PacketFindAllStructures.class, id++, Side.CLIENT);
         INSTANCE.registerMessage(PacketAttackAll.Handler.class, PacketAttackAll.class, id++, Side.SERVER);
         INSTANCE.registerMessage(PacketPhotoKill.Handler.class, PacketPhotoKill.class, id++, Side.SERVER);
+        INSTANCE.registerMessage(SPacketRushState.Handler.class, SPacketRushState.class, id++, Side.CLIENT);
+        INSTANCE.registerMessage(SPacketRushMount.Handler.class, SPacketRushMount.class, id++, Side.CLIENT);
     }
 }
