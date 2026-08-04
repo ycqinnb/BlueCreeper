@@ -20,7 +20,7 @@ import yc.ycqin.doth.common.entities.EntityCoin;
 import yc.ycqin.doth.common.entities.EntityItemSwordHighlight;
 import yc.ycqin.doth.common.entities.EntityRushPowerup;
 import yc.ycqin.doth.common.item.ItemReg;
-import yc.ycqin.doth.common.item.RecipeBuglinTicket;
+import yc.ycqin.doth.common.item.RecipeRushTicket;
 import yc.ycqin.doth.core.ProtectHelper;
 import yc.ycqin.doth.event.ArenaFriendlyFireHandler;
 import yc.ycqin.doth.event.BlockHighlightHandler;
@@ -45,7 +45,7 @@ public class DOTHMod
 {
     public static final String MODID = "bluecreepersword";
     public static final String NAME = "蓝C牌电子榨菜";
-    public static final String VERSION = "1.1.7";
+    public static final String VERSION = "1.1.9";
 
     public static Set<Entity> dead = new HashSet<>();
 
@@ -108,23 +108,16 @@ public class DOTHMod
         // 注册斗蛐蛐每 tick 逻辑
         MinecraftForge.EVENT_BUS.register(new ArenaTickHandler());
 
-        // ===== 虫灵快跑（仅 SRP 装载时） =====
-        if (Loader.isModLoaded("srparasites")) {
+        // ===== 生物快跑（不依赖 SRP；装载 SRP 时默认坐骑为虫灵） =====
+        // 跟随注入开关：关闭时整个生物快跑不注册（入场券不显示）
+        if (DOTHConfig.enableRushInjection) {
             // 维度
             RushManager.registerDimension();
-            // 入场券配方（2 鞍 + 含虫灵照片，NBT Ingredient 匹配）
-            GameRegistry.addShapelessRecipe(
-                    new ResourceLocation(MODID, "rush_ticket"),
-                    new ResourceLocation("doth_rush"),
-                    new ItemStack(ItemReg.RUSH_TICKET),
-                    net.minecraft.item.crafting.Ingredient.fromItem(net.minecraft.init.Items.SADDLE),
-                    net.minecraft.item.crafting.Ingredient.fromItem(net.minecraft.init.Items.SADDLE),
-                    new RecipeBuglinTicket.BuglinPhotoIngredient());
+            // 维度守卫事件（维度未注册时全部空转，无影响）
+            MinecraftForge.EVENT_BUS.register(RushManager.class);
+            // 每 tick 逻辑
+            MinecraftForge.EVENT_BUS.register(new RushTickHandler());
         }
-        // 维度守卫事件（维度未注册时全部空转，无影响）
-        MinecraftForge.EVENT_BUS.register(RushManager.class);
-        // 每 tick 逻辑
-        MinecraftForge.EVENT_BUS.register(new RushTickHandler());
         proxy.init(event);
     }
 
@@ -144,12 +137,24 @@ public class DOTHMod
         }
     }
 
-    /** 虫灵快跑每 tick 逻辑 */
+    /** 生物快跑每 tick 逻辑 */
     public static class RushTickHandler {
         @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
         public void onServerTick(net.minecraftforge.fml.common.gameevent.TickEvent.ServerTickEvent event) {
             if (event.phase == net.minecraftforge.fml.common.gameevent.TickEvent.Phase.END) {
                 RushManager.onServerTick();
+            }
+        }
+    }
+
+    /** 配方注册（生物快跑入场券，不依赖 SRP；跟随注入开关） */
+    @Mod.EventBusSubscriber(modid = DOTHMod.MODID)
+    public static class RecipeRegistrar {
+        @net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+        public static void registerRecipes(net.minecraftforge.event.RegistryEvent.Register<net.minecraft.item.crafting.IRecipe> event) {
+            if (DOTHConfig.enableRushInjection) {
+                event.getRegistry().register(
+                        new RecipeRushTicket().setRegistryName(new ResourceLocation(MODID, "rush_ticket")));
             }
         }
     }

@@ -21,7 +21,9 @@ import net.minecraft.util.SoundCategory;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentString;
+import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.BossInfo;
 import net.minecraft.world.BossInfoServer;
 import net.minecraft.world.DimensionType;
@@ -33,12 +35,12 @@ import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import com.dhanantry.scapeandrunparasites.entity.monster.inborn.EntityLodo;
 import yc.ycqin.doth.common.entities.EntityCoin;
 import yc.ycqin.doth.common.entities.EntityRushPowerup;
 import yc.ycqin.doth.network.NetworkHandler;
 import yc.ycqin.doth.network.SPacketRushMount;
 import yc.ycqin.doth.network.SPacketRushState;
+import yc.ycqin.doth.util.ReflectionHelper;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -132,6 +134,7 @@ public class RushManager {
         public EntityPlayerMP player;
         public int trackIndex;
         public double centerX;
+        public String mobId;         // 当前坐骑生物注册名（如 minecraft:zombie / srparasites:buglin）
         public EntityLivingBase buglin;
         public BossInfoServer bossBar;
         public int state;            // 0=倒数 1=进行中 2=已结束
@@ -186,10 +189,11 @@ public class RushManager {
     // ===== 进入 =====
 
     /**
-     * 玩家右键入场券：分配赛道、传送、生成虫灵、骑乘、开始倒数。
+     * 玩家右键入场券：分配赛道、传送、生成坐骑生物、骑乘、开始倒数。
+     * @param mobId 坐骑生物注册名（如 minecraft:zombie / srparasites:buglin）
      * @return 是否成功进入
      */
-    public static boolean enterRush(EntityPlayerMP player) {
+    public static boolean enterRush(EntityPlayerMP player, String mobId) {
         if (!dimensionRegistered) {
             player.sendMessage(new TextComponentString("§c[虫灵快跑] 维度未注册"));
             return false;
@@ -204,10 +208,10 @@ public class RushManager {
         WorldServer rushWorld = server.getWorld(RUSH_DIM_ID);
         if (rushWorld == null) return false;
 
-        // 生成 SRP 原版虫灵（EntityList 生成，不直接引用 SRP 类）
-        Entity buglin = EntityList.createEntityByIDFromName(new ResourceLocation("srparasites", "buglin"), rushWorld);
-        if (!(buglin instanceof EntityLivingBase)) {
-            player.sendMessage(new TextComponentString("§c[虫灵快跑] 无法生成虫灵（SRP 未正常装载？）"));
+        // 按注册名生成生物（EntityList，不直接引用任何模组类）
+        Entity mob = EntityList.createEntityByIDFromName(new ResourceLocation(mobId), rushWorld);
+        if (!(mob instanceof EntityLivingBase)) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 无法生成生物：" + mobId));
             return false;
         }
 
@@ -228,6 +232,7 @@ public class RushManager {
         run.player = player;
         run.trackIndex = track;
         run.centerX = track * TRACK_SPACING;
+        run.mobId = mobId;
         run.state = 0;
         run.countdownTicks = 3 * 20;
         run.nextGenZ = START_Z + 8;
@@ -255,38 +260,47 @@ public class RushManager {
         player.connection.setPlayerLocation(run.centerX, TRACK_Y2 + 2, START_Z, 0.0F, 30.0F);
         player.setGameType(GameType.ADVENTURE);
 
-        // 虫灵（Mixin 已让虫灵可骑乘；移动由 Mixin travel 接管，无需手动 setPosition）
-        EntityLivingBase lodo = (EntityLivingBase) buglin;
-        lodo.setNoGravity(true);
-        lodo.setHealth(lodo.getMaxHealth());
-        lodo.addTag(TAG_RUSH);
-        lodo.setPosition(run.centerX, TRACK_Y2 + 1, START_Z);
-        lodo.rotationYaw = 0.0F;
-        rushWorld.spawnEntity(lodo);
-        run.buglin = lodo;
-        setRushState(lodo, STATE_HOLD); // 倒数中原地不动
+        // 坐骑（ASM 已让 EntityLivingBase 全类可骑；移动由 travel hook 接管）
+        EntityLivingBase mount = (EntityLivingBase) mob;
+        // 清除原 AI（防乱跑/攻击/瞬移/自爆），快跑移动完全由 hook/tickRun 接管
+        if (mount instanceof EntityLiving) {
+            ((EntityLiving) mount).tasks.taskEntries.clear();
+            ((EntityLiving) mount).targetTasks.taskEntries.clear();
+            ((EntityLiving) mount).setNoAI(true);
+        }
+        mount.setNoGravity(true);
+        mount.setHealth(mount.getMaxHealth());
+        mount.addTag(TAG_RUSH);
+        mount.setPosition(run.centerX, TRACK_Y2 + 1, START_Z);
+        mount.rotationYaw = 0.0F;
+        rushWorld.spawnEntity(mount);
+        run.buglin = mount;
+        setRushState(mount, STATE_HOLD); // 倒数中原地不动
 
         // 骑乘 + 手动补发乘客状态（保险）
-        if (!player.startRiding(lodo, true)) {
-            player.sendMessage(new TextComponentString("§c[虫灵快跑] 骑乘虫灵失败"));
+        if (!player.startRiding(mount, true)) {
+            player.sendMessage(new TextComponentString("§c[虫灵快跑] 骑乘失败"));
             endGame(run, "骑乘失败");
             return false;
         }
-        player.connection.sendPacket(new net.minecraft.network.play.server.SPacketSetPassengers(lodo));
+        player.connection.sendPacket(new net.minecraft.network.play.server.SPacketSetPassengers(mount));
 
-        // Boss 血条（玩家名 + 虫灵）
-        run.bossBar = new BossInfoServer(
-                new TextComponentString("§c" + player.getName() + " 的虫灵"),
-                BossInfo.Color.RED, BossInfo.Overlay.PROGRESS);
+        // Boss 血条（玩家名 + 生物名）
+        TextComponentString bossTitle = new TextComponentString("§c" + player.getName() + " 的 ");
+        bossTitle.appendSibling(mobNameComponent(mobId));
+        run.bossBar = new BossInfoServer(bossTitle, BossInfo.Color.RED, BossInfo.Overlay.PROGRESS);
         run.bossBar.addPlayer(player);
-        run.bossBar.setPercent(lodo.getHealth() / Math.max(1.0F, lodo.getMaxHealth()));
+        run.bossBar.setPercent(mount.getHealth() / Math.max(1.0F, mount.getMaxHealth()));
 
         // 通知客户端（维度 id + 激活 HUD）
         NetworkHandler.INSTANCE.sendTo(new SPacketRushState(RUSH_DIM_ID, 0, 0, 0, true), player);
 
-        player.sendMessage(new TextComponentString("§e[虫灵快跑] 骑上虫灵，3、2、1 后出发！A/D 左右移动，Shift 下区即弃权"));
+        TextComponentString enterMsg = new TextComponentString("§e[虫灵快跑] 骑上");
+        enterMsg.appendSibling(mobNameComponent(mobId));
+        enterMsg.appendText("，3、2、1 后出发！A/D 左右移动，Shift 下区即弃权");
+        player.sendMessage(enterMsg);
         sendTitle(player, "§l§6虫灵快跑", "§7" + player.getName());
-        log.info("[RUSH] {} 进入赛道 {}，中心 x={}", player.getName(), track, run.centerX);
+        log.info("[RUSH] {} 进入赛道 {}，坐骑 {}，中心 x={}", player.getName(), track, mobId, run.centerX);
         return true;
     }
 
@@ -297,7 +311,7 @@ public class RushManager {
         for (int x = cx1; x <= cx2; x++) {
             for (int z = zStart; z <= zEnd; z++) {
                 for (int y = TRACK_Y1; y <= TRACK_Y2; y++) {
-                    world.setBlockState(new BlockPos(x, y, z), Blocks.STONE.getDefaultState(), 2);
+                    world.setBlockState(new BlockPos(x, y, z), Blocks.QUARTZ_BLOCK.getDefaultState(), 2);
                 }
             }
         }
@@ -426,6 +440,13 @@ public class RushManager {
 
         // 倒数
         if (run.state == 0) {
+            // 兜底：travel 被生物自身覆写（马/蝙蝠/史莱姆等）时，倒数期间锁回出生点
+            if (!yc.ycqin.doth.core.RushAsmHooks.wasMovedThisTick(run.buglin)) {
+                run.buglin.setPosition(run.centerX, TRACK_Y2 + 1, START_Z);
+                run.buglin.motionX = 0.0D;
+                run.buglin.motionY = 0.0D;
+                run.buglin.motionZ = 0.0D;
+            }
             run.countdownTicks--;
             if (run.countdownTicks % 20 == 0) {
                 int sec = (run.countdownTicks + 19) / 20;
@@ -446,6 +467,20 @@ public class RushManager {
         // ===== 虫灵由 Mixin travel() 驱动（恒定前进 + 左右），这里只做判定/生成 =====
         if (run.shieldTicks > 0) run.shieldTicks--;
 
+        // 兜底：travel 被生物自身覆写（马/蝙蝠/史莱姆等）时，服务端直接推动
+        if (!yc.ycqin.doth.core.RushAsmHooks.wasMovedThisTick(run.buglin)) {
+            float strafe = run.player != null ? run.player.moveStrafing * 0.5F : 0.0F;
+            float spd = getRunSpeed(run.buglin);
+            float s = steerFor(run.buglin, strafe);
+            run.buglin.setPosition(run.buglin.posX + s * spd, run.buglin.posY, run.buglin.posZ + spd);
+            run.buglin.rotationYaw = 0.0F;
+            run.buglin.prevRotationYaw = 0.0F;
+            run.buglin.rotationPitch = 0.0F;
+            run.buglin.prevLimbSwingAmount = run.buglin.limbSwingAmount;
+            run.buglin.limbSwingAmount = Math.min(1.0F, run.buglin.limbSwingAmount + 0.35F);
+            run.buglin.limbSwing += run.buglin.limbSwingAmount;
+        }
+
         double nz = run.buglin.posZ;
         double nx = run.buglin.posX;
 
@@ -465,7 +500,7 @@ public class RushManager {
                 for (int x = cx1; x <= cx2; x++) {
                     for (int z = run.lastFillZ; z <= fillTo; z++) {
                         for (int y = TRACK_Y1; y <= TRACK_Y2; y++) {
-                            w.setBlockState(new BlockPos(x, y, z), Blocks.STONE.getDefaultState(), 2);
+                            w.setBlockState(new BlockPos(x, y, z), Blocks.QUARTZ_BLOCK.getDefaultState(), 2);
                         }
                     }
                 }
@@ -484,7 +519,7 @@ public class RushManager {
                 player.sendMessage(new TextComponentString("§7[虫灵快跑] 无敌模式，碰撞免疫"));
             } else {
                 float hp = run.buglin.getHealth() - OBSTACLE_DAMAGE;
-                run.buglin.setHealth(Math.max(0.0F, hp));
+                ReflectionHelper.nbSetHealth(run.buglin,Math.max(0.0F, hp));
                 player.sendMessage(new TextComponentString("§c[虫灵快跑] 撞上障碍 -" + OBSTACLE_DAMAGE + " 血"));
             }
             removeObstacleBlock(run, hitPos);
@@ -577,14 +612,27 @@ public class RushManager {
         }
     }
 
-    // ===== 障碍判定：找虫灵前方/身侧 1.5 格内的障碍（提前移除，防物理卡住） =====
+    // ===== 障碍判定：用虫灵实际包围盒与障碍方块相交判定（提前移除，防物理卡住） =====
+    // 判定盒四边各向外扩 0.05 格：物理碰撞会把虫灵挡在方块表面（进不了方块内部），
+    // 判定盒必须比真实方块稍大，才能在撞上前一 tick 触发（删块 + 掉血）。
+    // 1 格宽空隙（0.5 宽虫灵）居中仍可穿过。
+    private static final double OBSTACLE_HIT_EXPAND = 0.05D;
+
     private static BlockPos findNearObstacle(RushRun run, double nx, double nz) {
+        EntityLivingBase buglin = run.buglin;
+        if (buglin == null) return null;
+        AxisAlignedBB bugBox = buglin.getEntityBoundingBox();
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
         for (BlockPos p : run.obstacles) {
-            if (p.getZ() < nz - 0.5D || p.getZ() > nz + 1.5D) continue;
+            // 障碍实际占用 [x, x+1] x [z, z+1]，判定范围四边各向外扩 0.05 格
+            double ox1 = p.getX() - OBSTACLE_HIT_EXPAND;
+            double ox2 = p.getX() + 1.0D + OBSTACLE_HIT_EXPAND;
+            double oz1 = p.getZ() - OBSTACLE_HIT_EXPAND;
+            double oz2 = p.getZ() + 1.0D + OBSTACLE_HIT_EXPAND;
+            if (bugBox.maxX <= ox1 || bugBox.minX >= ox2) continue;
+            if (bugBox.maxZ <= oz1 || bugBox.minZ >= oz2) continue;
             double dx = p.getX() + 0.5D - nx;
-            if (Math.abs(dx) > 1.0D) continue;
             double d = dx * dx;
             if (d < bestDist) {
                 bestDist = d;
@@ -784,13 +832,13 @@ public class RushManager {
         }
     }
 
-    // ===== 虫灵状态（DataWatcher，自动同步客户端；Mixin 在 entityInit 里注册这个 key） =====
-    // 懒加载：避免在未装 SRP 时直接引用 EntityLodo 类导致类加载失败
+    // ===== 坐骑状态（DataWatcher，自动同步客户端；ASM 在 EntityLivingBase.entityInit 里注册这个 key） =====
+    // 所有生物共用 EntityLivingBase 作 key owner（1.12.2 不校验 owner，子类实例可正常注册）
     private static DataParameter<Byte> rushStateKey = null;
 
     public static DataParameter<Byte> getRushStateKey() {
         if (rushStateKey == null) {
-            rushStateKey = EntityDataManager.createKey(EntityLodo.class, DataSerializers.BYTE);
+            rushStateKey = EntityDataManager.createKey(EntityLivingBase.class, DataSerializers.BYTE);
         }
         return rushStateKey;
     }
@@ -799,6 +847,64 @@ public class RushManager {
         if (buglin != null) {
             buglin.getDataManager().set(getRushStateKey(), state);
         }
+    }
+
+    // ===== 生物名 =====
+
+    /** 生物注册名 → 翻译 key（EntityEntry 名，可能是翻译 key 或原版名如 Zombie） */
+    public static String getMobTranslationKey(String mobId) {
+        if (mobId == null || mobId.isEmpty()) return null;
+        try {
+            return EntityList.getTranslationName(new ResourceLocation(mobId));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 生物注册名 → 本地化显示名（客户端按当前语言，服务端用默认语言兜底） */
+    public static String getMobDisplayName(String mobId) {
+        String raw = getMobTranslationKey(mobId);
+        String fallback = mobId != null && mobId.contains(":") ? mobId.substring(mobId.indexOf(':') + 1) : mobId;
+        if (raw == null || raw.isEmpty()) return fallback;
+        try {
+            boolean client = net.minecraftforge.fml.common.FMLCommonHandler.instance().getEffectiveSide()
+                    == net.minecraftforge.fml.relauncher.Side.CLIENT;
+            String t = client
+                    ? net.minecraft.client.resources.I18n.format(raw)
+                    : net.minecraft.util.text.translation.I18n.translateToLocal(raw);
+            if (t != null && !t.isEmpty() && !t.equals(raw)) return t;
+            // 原版生物：EntityEntry 名是 Zombie 这类，翻译 key 是 entity.Zombie.name
+            String k2 = "entity." + raw + ".name";
+            String t2 = client
+                    ? net.minecraft.client.resources.I18n.format(k2)
+                    : net.minecraft.util.text.translation.I18n.translateToLocal(k2);
+            if (t2 != null && !t2.isEmpty() && !t2.equals(k2)) return t2;
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
+    /** 选聊天组件用的翻译 key：raw 本身就是 key 就用 raw，否则按原版规则拼 entity.raw.name */
+    private static String pickMobKey(String raw) {
+        try {
+            String t = net.minecraft.util.text.translation.I18n.translateToLocal(raw);
+            if (t != null && !t.isEmpty() && !t.equals(raw)) return raw;
+            String k2 = "entity." + raw + ".name";
+            String t2 = net.minecraft.util.text.translation.I18n.translateToLocal(k2);
+            if (t2 != null && !t2.isEmpty() && !t2.equals(k2)) return k2;
+        } catch (Exception ignored) {
+        }
+        return raw;
+    }
+
+    /** 生物注册名 → 可本地化的文本组件（客户端渲染时按玩家语言显示） */
+    public static ITextComponent mobNameComponent(String mobId) {
+        String raw = getMobTranslationKey(mobId);
+        if (raw != null && !raw.isEmpty()) {
+            return new TextComponentTranslation(pickMobKey(raw));
+        }
+        String fallback = mobId != null && mobId.contains(":") ? mobId.substring(mobId.indexOf(':') + 1) : mobId;
+        return new TextComponentString(fallback);
     }
 
     /** 当前奔跑速度：基础 + 距离递增（每 100 格 +0.05，上限 1.0），加速道具加成 */

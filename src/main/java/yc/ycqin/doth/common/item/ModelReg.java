@@ -17,8 +17,8 @@ public class ModelReg {
         registerModel(ItemReg.BLUE_CREEPER_SWORD);
         registerModel(ItemReg.CAMERA);
         registerModel(ItemReg.BIO_PHOTO);
-        // 虫灵快跑入场券（仅 SRP 装载时注册了物品）
-        if (net.minecraftforge.fml.common.Loader.isModLoaded("srparasites")) {
+        // 生物快跑入场券（跟随注入开关，关闭不注册则不显示）
+        if (yc.ycqin.doth.core.DOTHConfig.enableRushInjection) {
             registerModel(ItemReg.RUSH_TICKET);
         }
         // compressed_clip 有 subtypes，需要逐个注册

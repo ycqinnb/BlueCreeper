@@ -13,6 +13,8 @@ public class DOTHConfig {
     public static boolean replaceEntityList = false;
     /** 拦截非白名单 mod 的事件监听器（需 replaceEventBus=true） */
     public static boolean blockModEvents;
+    /** 生物快跑注入开关：关闭后不注入 EntityLivingBase，入场券不显示（防止注入兼容问题导致无法游戏） */
+    public static boolean enableRushInjection = true;
 
     private static final String FILE_NAME = "config/doth.cfg";
     private static long lastModified;
@@ -32,11 +34,13 @@ public class DOTHConfig {
             if (!p.containsKey("strongCompat")) { needSave = true; }
             if (!p.containsKey("replaceEntityList")) { needSave = true; }
             if (!p.containsKey("blockModEvents")) { needSave = true; }
+            if (!p.containsKey("enableRushInjection")) { needSave = true; }
             enableAllReturn = Boolean.parseBoolean(p.getProperty("enableAllReturn", "false"));
             replaceEventBus = Boolean.parseBoolean(p.getProperty("replaceEventBus", "false"));
             strongCompat = Boolean.parseBoolean(p.getProperty("strongCompat", "false"));
             replaceEntityList = Boolean.parseBoolean(p.getProperty("replaceEntityList", "false"));
             blockModEvents = Boolean.parseBoolean(p.getProperty("blockModEvents", "false"));
+            enableRushInjection = Boolean.parseBoolean(p.getProperty("enableRushInjection", "true"));
             if (needSave) saveDefault();
         } catch (Exception e) {
             System.err.println("[DOTH] Config reload failed: " + e);
@@ -56,12 +60,14 @@ public class DOTHConfig {
                 w.write("# strongCompat     : 强兼模式，替换双端 run() 尝试吃掉报错\r\n");
                 w.write("# replaceEntityList: 替换 loadedEntityList 以增强禁生成\r\n");
                 w.write("# blockModEvents   : 拦截事件，需开启replaceEventBus才能生效\r\n");
+                w.write("# enableRushInjection: 生物快跑注入开关，关闭后不注入EntityLivingBase且入场券不显示\r\n");
                 w.write("#\r\n");
                 w.write("enableAllReturn=" + enableAllReturn + "\r\n");
                 w.write("replaceEventBus=" + replaceEventBus + "\r\n");
                 w.write("strongCompat=" + strongCompat + "\r\n");
                 w.write("replaceEntityList=" + replaceEntityList + "\r\n");
                 w.write("blockModEvents=" + blockModEvents + "\r\n");
+                w.write("enableRushInjection=" + enableRushInjection + "\r\n");
             }
         } catch (Exception e) { /* ignore */ }
     }

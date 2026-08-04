@@ -4,6 +4,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.boss.EntityDragon;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.item.EntityXPOrb;
 import net.minecraft.entity.player.EntityPlayer;
@@ -195,7 +196,9 @@ public class EntityDeletionHelper {
                     Dead((EntityPlayer) target);
                 }
             }
-            target.isDead = true;
+            if (!(target instanceof EntityDragon)){
+                target.isDead = true;
+            }
         } catch (Exception e) {
             // 以防万一，捕获所有异常防止崩服
             System.err.println("Failed to delete entity: " + target.getClass().getName());

@@ -37,7 +37,7 @@ public class RushChunkGenerator implements IChunkGenerator {
                 int endX = Math.min(cx2, x * 16 + 15);
                 for (int wx = startX; wx <= endX; wx++) {
                     for (int wy = RushManager.TRACK_Y1; wy <= RushManager.TRACK_Y2; wy++) {
-                        primer.setBlockState(wx & 15, wy, z & 15, Blocks.STONE.getDefaultState());
+                        primer.setBlockState(wx & 15, wy, z & 15, Blocks.QUARTZ_BLOCK.getDefaultState());
                     }
                 }
             }

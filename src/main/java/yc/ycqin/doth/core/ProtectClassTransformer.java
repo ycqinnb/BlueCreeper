@@ -21,6 +21,14 @@ public class ProtectClassTransformer implements IClassTransformer {
 
     @Override
     public byte[] transform(String name, String transformedName, byte[] basicClass) {
+        // 生物快跑：所有生物通用骑乘/移动注入（EntityLivingBase 全局，可配置关闭）
+        if (transformedName.equals("net.minecraft.entity.EntityLivingBase")) {
+            DOTHConfig.reload();
+            if (DOTHConfig.enableRushInjection) {
+                return transformLivingBaseRide(basicClass);
+            }
+            return basicClass;
+        }
         // 虫灵快跑：禁止 SRP 虫灵进化（growStage 维度判断）
         if (transformedName.equals("com.dhanantry.scapeandrunparasites.entity.monster.inborn.EntityLodo")) {
             return transformLodoGrow(basicClass);
@@ -584,6 +592,113 @@ public class ProtectClassTransformer implements IClassTransformer {
     }
 
     /**
+     * EntityLivingBase 全局注入（所有生物子类自动继承）：
+     *  - travel(func_191986_a) 开头：rushTravel 接管快跑移动（状态 0 走原版）
+     *  - canBeSteered(func_82171_bF)：isBeingRidden()
+     *  - entityInit(func_70088_a) 开头：注册 DataWatcher 状态位
+     *  - canBeRidden(func_184228_n)：新增覆写，仅快跑维度内可骑
+     */
+    private byte[] transformLivingBaseRide(byte[] basicClass) {
+        try {
+            ClassReader cr = new ClassReader(basicClass);
+            ClassNode cn = new ClassNode();
+            cr.accept(cn, 0);
+            boolean changed = false;
+
+            // 1. travel(FFF)V 开头注入：if (rushTravel(this, s, v, f)) return;
+            MethodNode travel = findMethod(cn, "func_191986_a", "(FFF)V");
+            if (travel != null) {
+                InsnList insns = new InsnList();
+                insns.add(new VarInsnNode(ALOAD, 0));
+                insns.add(new VarInsnNode(FLOAD, 1));
+                insns.add(new VarInsnNode(FLOAD, 2));
+                insns.add(new VarInsnNode(FLOAD, 3));
+                insns.add(new MethodInsnNode(INVOKESTATIC,
+                        "yc/ycqin/doth/core/RushAsmHooks",
+                        "rushTravel", "(Lnet/minecraft/entity/EntityLivingBase;FFF)Z", false));
+                LabelNode skip = new LabelNode();
+                insns.add(new JumpInsnNode(IFEQ, skip));
+                insns.add(new InsnNode(RETURN));
+                insns.add(skip);
+                travel.instructions.insert(insns);
+                changed = true;
+            }
+
+            // 2. canBeSteered()Z：替换为 isBeingRidden()
+            MethodNode steer = findMethod(cn, "func_82171_bF", "()Z");
+            if (steer != null) {
+                steer.instructions.clear();
+                steer.tryCatchBlocks.clear();
+                steer.localVariables.clear();
+                steer.instructions.add(new VarInsnNode(ALOAD, 0));
+                steer.instructions.add(new MethodInsnNode(INVOKESTATIC,
+                        "yc/ycqin/doth/core/RushAsmHooks",
+                        "canBeSteered", "(Lnet/minecraft/entity/EntityLivingBase;)Z", false));
+                steer.instructions.add(new InsnNode(IRETURN));
+                changed = true;
+            } else {
+                MethodNode mn = new MethodNode(ACC_PUBLIC, "func_82171_bF", "()Z", null, null);
+                mn.instructions.add(new VarInsnNode(ALOAD, 0));
+                mn.instructions.add(new MethodInsnNode(INVOKESTATIC,
+                        "yc/ycqin/doth/core/RushAsmHooks",
+                        "canBeSteered", "(Lnet/minecraft/entity/EntityLivingBase;)Z", false));
+                mn.instructions.add(new InsnNode(IRETURN));
+                cn.methods.add(mn);
+                changed = true;
+            }
+
+            // 3. entityInit()V 开头注入：registerRushState(this)
+            MethodNode entityInit = findMethod(cn, "func_70088_a", "()V");
+            if (entityInit != null) {
+                InsnList insns = new InsnList();
+                insns.add(new VarInsnNode(ALOAD, 0));
+                insns.add(new MethodInsnNode(INVOKESTATIC,
+                        "yc/ycqin/doth/core/RushAsmHooks",
+                        "registerRushState", "(Lnet/minecraft/entity/EntityLivingBase;)V", false));
+                entityInit.instructions.insert(insns);
+                changed = true;
+            }
+
+            // 4. canBeRidden(Entity)Z：新增覆写，仅快跑维度可骑
+            MethodNode ride = findMethod(cn, "func_184228_n", "(Lnet/minecraft/entity/Entity;)Z");
+            if (ride != null) {
+                ride.instructions.clear();
+                ride.tryCatchBlocks.clear();
+                ride.localVariables.clear();
+                ride.instructions.add(new VarInsnNode(ALOAD, 0));
+                ride.instructions.add(new MethodInsnNode(INVOKESTATIC,
+                        "yc/ycqin/doth/core/RushAsmHooks",
+                        "canBeRidden", "(Lnet/minecraft/entity/EntityLivingBase;)Z", false));
+                ride.instructions.add(new InsnNode(IRETURN));
+                changed = true;
+            } else {
+                MethodNode mn = new MethodNode(ACC_PUBLIC, "func_184228_n",
+                        "(Lnet/minecraft/entity/Entity;)Z", null, null);
+                mn.instructions.add(new VarInsnNode(ALOAD, 0));
+                mn.instructions.add(new MethodInsnNode(INVOKESTATIC,
+                        "yc/ycqin/doth/core/RushAsmHooks",
+                        "canBeRidden", "(Lnet/minecraft/entity/EntityLivingBase;)Z", false));
+                mn.instructions.add(new InsnNode(IRETURN));
+                cn.methods.add(mn);
+                changed = true;
+            }
+
+            if (!changed) {
+                System.out.println("[DOTH] EntityLivingBase ride patch targets not found, skip");
+                return basicClass;
+            }
+
+            ClassWriter cw = new ClassWriter(cr, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+            cn.accept(cw);
+            System.out.println("[DOTH] EntityLivingBase patched: ride/move hooks installed");
+            return cw.toByteArray();
+        } catch (Exception e) {
+            System.out.println("[DOTH] EntityLivingBase transform failed: " + e);
+            return basicClass;
+        }
+    }
+
+    /**
      * EntityLodo 补丁：
      *  - growStage / func_82167_n 注入维度守卫（不进化、不叠 COTH_E）
      *  - 新增骑乘覆写方法：canBeRidden(true) / canBeSteered / travel / entityInit(注册 DataWatcher)
@@ -670,23 +785,8 @@ public class ProtectClassTransformer implements IClassTransformer {
                 addedRide = true;
             }
 
-            // entityInit()V → super.entityInit + 注册 DataWatcher 状态位
-            if (findMethod(cn, "func_70088_a", "()V") == null) {
-                MethodNode mn = new MethodNode(ACC_PROTECTED, "func_70088_a", "()V", null, null);
-                InsnList body = new InsnList();
-                body.add(new VarInsnNode(ALOAD, 0));
-                body.add(new MethodInsnNode(INVOKESPECIAL,
-                        "com/dhanantry/scapeandrunparasites/entity/ai/misc/EntityParasiteBase",
-                        "func_70088_a", "()V", false));
-                body.add(new VarInsnNode(ALOAD, 0));
-                body.add(new MethodInsnNode(INVOKESTATIC,
-                        "yc/ycqin/doth/core/RushAsmHooks",
-                        "registerRushState", "(Lnet/minecraft/entity/EntityLivingBase;)V", false));
-                body.add(new InsnNode(RETURN));
-                mn.instructions.add(body);
-                cn.methods.add(mn);
-                addedRide = true;
-            }
+            // entityInit：不再添加 —— EntityLivingBase 全局注入已负责注册 DataWatcher 状态位，
+            // 再给 Lodo 单独加会双重注册导致 Duplicate id value 崩溃（保留 growStage 防进化）
 
             if (patched == 0 && !addedRide) {
                 System.out.println("[DOTH] EntityLodo patch targets not found, skip");

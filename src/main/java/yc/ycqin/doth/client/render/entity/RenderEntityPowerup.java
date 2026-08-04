@@ -30,7 +30,7 @@ public class RenderEntityPowerup extends Render<EntityRushPowerup> {
         if (stack.isEmpty()) return;
         GlStateManager.pushMatrix();
         GlStateManager.translate(x, y + 0.25D, z);
-        GlStateManager.scale(0.8F, 0.8F, 0.8F);
+        GlStateManager.scale(1.1F, 1.1F, 1.1F);
         GlStateManager.rotate((entity.ticksExisted + partialTicks) * 4.0F, 0.0F, 1.0F, 0.0F);
         RenderHelper.enableStandardItemLighting();
         Minecraft.getMinecraft().getRenderItem().renderItem(stack, ItemCameraTransforms.TransformType.GROUND);

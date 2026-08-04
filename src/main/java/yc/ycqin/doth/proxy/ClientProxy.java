@@ -17,6 +17,7 @@ import yc.ycqin.doth.common.entities.EntityItemSwordHighlight;
 import yc.ycqin.doth.common.entities.EntityRushPowerup;
 import yc.ycqin.doth.common.item.ModelReg;
 import yc.ycqin.doth.event.ClientEvent;
+import yc.ycqin.doth.event.ClientLanguageSync;
 import yc.ycqin.doth.event.EntityHighlightHandler;
 import yc.ycqin.doth.event.RushClientHandler;
 
@@ -44,6 +45,8 @@ public class ClientProxy extends CommonProxy {
         MinecraftForge.EVENT_BUS.register(new ClientEvent());
         MinecraftForge.EVENT_BUS.register(new EntityHighlightHandler());
         MinecraftForge.EVENT_BUS.register(new RushClientHandler());
+        // 客户端语言同步到 LanguageMap（修复 TextComponentTranslation 聊天/血条显示英文）
+        MinecraftForge.EVENT_BUS.register(new ClientLanguageSync());
         new ModelReg();
         ShaderHelper.initShaders();
     }

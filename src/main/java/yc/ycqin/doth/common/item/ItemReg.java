@@ -33,8 +33,8 @@ public class ItemReg {
                 BIO_PHOTO,
                 COMPRESSED_CLIP
         );
-        // 虫灵快跑：仅在装载 srparasites 模组时注册入场券
-        if (net.minecraftforge.fml.common.Loader.isModLoaded("srparasites")) {
+        // 生物快跑入场券：仅在注入开关开启时注册（关闭则不显示）
+        if (yc.ycqin.doth.core.DOTHConfig.enableRushInjection) {
             event.getRegistry().register(RUSH_TICKET);
         }
     }

@@ -29,7 +29,7 @@ public class RenderEntityCoin extends Render<EntityCoin> {
     public void doRender(EntityCoin entity, double x, double y, double z, float entityYaw, float partialTicks) {
         GlStateManager.pushMatrix();
         GlStateManager.translate(x, y + 0.25D, z);
-        GlStateManager.scale(0.6F, 0.6F, 0.6F);
+        GlStateManager.scale(1.2F, 1.2F, 1.2F);
         GlStateManager.rotate((entity.ticksExisted + partialTicks) * 6.0F, 0.0F, 1.0F, 0.0F);
         GlStateManager.rotate((entity.ticksExisted + partialTicks) * 2.0F, 1.0F, 0.0F, 0.0F);
         RenderHelper.enableStandardItemLighting();

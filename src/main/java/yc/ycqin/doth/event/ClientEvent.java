@@ -25,6 +25,7 @@ import net.minecraftforge.fml.relauncher.SideOnly;
 import org.lwjgl.BufferUtils;
 import yc.ycqin.doth.DOTHMod;
 import yc.ycqin.doth.client.render.item.CosmicItemRender;
+import yc.ycqin.doth.client.render.item.TicketItemRender;
 import yc.ycqin.doth.client.render.shader.CosmicShaderHelper;
 
 import java.nio.FloatBuffer;
@@ -62,6 +63,18 @@ public class ClientEvent {
         event.getModelRegistry().putObject(swordLocation, cosmicModel);
 
         System.out.println("Blue Creeper Sword model replaced with CosmicItemRender!");
+
+        // ===== 虫灵快跑入场券：材质 + 四边文字（顶富就玩/虫灵快跑/富玩镐/穷砍树） =====
+        ModelResourceLocation ticketLocation = new ModelResourceLocation(
+                new ResourceLocation(DOTHMod.MODID, "rush_ticket"),
+                "inventory"
+        );
+        IBakedModel ticketModel = event.getModelRegistry().getObject(ticketLocation);
+        if (ticketModel != null) {
+            event.getModelRegistry().putObject(ticketLocation,
+                    new TicketItemRender(TransformUtils.DEFAULT_ITEM, ticketModel));
+            System.out.println("Rush Ticket model replaced with TicketItemRender!");
+        }
     }
 
 
