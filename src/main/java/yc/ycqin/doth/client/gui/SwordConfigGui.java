@@ -75,7 +75,7 @@ public class SwordConfigGui extends GuiScreen {
         else if(activeTab==1){rows.add(new Row("尝试掉东西",tryDropItems));rows.add(new Row("秒挖任何方块",instantMine));rows.add(new Row("掉落直进包",magnetDrops));rows.add(new Row("收集掉落物",collectEntityDrops));rows.add(new Row("关闭mod画面",closeNonVanillaGui));rows.add(new Row("防缴械",antiDisarm));rows.add(new Row("快照补剑",autoRecreate));rows.add(new Row("§d✦ Buff增强",enableBuffs));}
         else if(activeTab==2){rows.add(new Row("启用高亮 "+(BlockHighlightConfig.enabled?"§aON":"§8OFF")));rows.add(new Row("一键挖掘 "+(BlockHighlightConfig.mineAllEnabled?"§aON":"§8OFF")));rows.add(new Row("搜索范围", "f_range"));rows.add(new Row("更新频率", "f_freq"));rows.add(new Row("挖掘半径", "f_radius"));rows.add(new Row("§d✦ 管理方块列表","",""));rows.add(new Row("§c清空高亮列表"));}
         else if(activeTab==3){for(int i=0;i<structIds.size();i++)rows.add(new Row((structFound && i==lastSearchedStruct?"§a▶ ":"")+structNames.get(i)));}
-        else if(activeTab==4){rows.add(new Row("启用高亮 "+(EntityHighlightConfig.enabled?"§aON":"§8OFF")));rows.add(new Row("一键攻击 "+(EntityHighlightConfig.attackAllEnabled?"§aON":"§8OFF")));rows.add(new Row("搜索范围", "e_range"));rows.add(new Row("更新频率", "e_freq"));rows.add(new Row("攻击半径", "e_radius"));rows.add(new Row("§d✦ 管理实体列表","",""));rows.add(new Row("§c清空高亮列表"));}
+        else if(activeTab==4){rows.add(new Row("启用高亮 "+(EntityHighlightConfig.enabled?"§aON":"§8OFF")));rows.add(new Row("一键攻击 "+(EntityHighlightConfig.attackAllEnabled?"§aON":"§8OFF")));rows.add(new Row("搜索范围", "e_range"));rows.add(new Row("更新频率", "e_freq"));rows.add(new Row("攻击半径", "e_radius"));rows.add(new Row("§d✦ 管理实体列表","",""));rows.add(new Row("§c清空高亮列表"));rows.add(new Row("§6✦ 管理攻击白名单 §7(" + EntityHighlightConfig.attackWhitelist.size() + ")","",""));rows.add(new Row("§c清空白名单"));}
         int th=rows.size()*24; maxScroll=Math.max(0,th-contentH+10); if(scrollOffset>maxScroll)scrollOffset=maxScroll; if(scrollOffset<0)scrollOffset=0;
     }
 
@@ -243,6 +243,8 @@ public class SwordConfigGui extends GuiScreen {
                 else if (idx==1) {EntityHighlightConfig.attackAllEnabled=!EntityHighlightConfig.attackAllEnabled;rebuild();}
                 else if (idx==5) {mc.displayGuiScreen(new EntitySearchGui(this));}
                 else if (idx==6) {EntityHighlightConfig.highlightEntities.clear();rebuild();}
+                else if (idx==7) {mc.displayGuiScreen(new EntitySearchGui(this, true));}
+                else if (idx==8) {EntityHighlightConfig.attackWhitelist.clear();rebuild();}
             } else if (activeTab == 3) {
                 int si = idx;
                 if (si >= 0 && si < structIds.size()) {

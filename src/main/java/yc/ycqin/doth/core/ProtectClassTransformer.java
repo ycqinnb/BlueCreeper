@@ -21,14 +21,6 @@ public class ProtectClassTransformer implements IClassTransformer {
 
     @Override
     public byte[] transform(String name, String transformedName, byte[] basicClass) {
-        // 生物快跑：所有生物通用骑乘/移动注入（EntityLivingBase 全局，可配置关闭）
-        if (transformedName.equals("net.minecraft.entity.EntityLivingBase")) {
-            DOTHConfig.reload();
-            if (DOTHConfig.enableRushInjection) {
-                return transformLivingBaseRide(basicClass);
-            }
-            return basicClass;
-        }
         // 虫灵快跑：禁止 SRP 虫灵进化（growStage 维度判断）
         if (transformedName.equals("com.dhanantry.scapeandrunparasites.entity.monster.inborn.EntityLodo")) {
             return transformLodoGrow(basicClass);
@@ -345,7 +337,16 @@ public class ProtectClassTransformer implements IClassTransformer {
                     return super.visitMethod(access, mname, desc, sig, exc);
                 }
             };
-            cr.accept(cv, 0); return cw.toByteArray();
+            // 先跑上面的保护注入（攻击拦截/死亡保护/血量钩子等）
+            cr.accept(cv, 0);
+            byte[] protectedBytes = cw.toByteArray();
+            // 再叠加生物快跑骑乘注入：必须基于 protectedBytes 继续处理，
+            // 不能 return transformLivingBaseRide(basicClass) —— 那样会丢掉保护注入的结果
+            DOTHConfig.reload();
+            if (DOTHConfig.enableRushInjection) {
+                return transformLivingBaseRide(protectedBytes);
+            }
+            return protectedBytes;
         }
 
         if (transformedName.equals("net.minecraft.entity.player.EntityPlayer")) {

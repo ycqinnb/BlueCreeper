@@ -44,6 +44,11 @@ public class EntityDeletionHelper {
             return;
         }
 
+        // 攻击白名单：名单内的生物永远不会被武器攻击/删除（所有攻击路径都经过这里）
+        if (EntityHighlightConfig.isAttackWhitelisted(target)) {
+            return;
+        }
+
         if (target instanceof EntityItem || target instanceof EntityXPOrb){
             if (player != null && stack != null && SwordConfigHelper.isCollectEntityDrops(player, stack)) {
                 if (target instanceof EntityItem){

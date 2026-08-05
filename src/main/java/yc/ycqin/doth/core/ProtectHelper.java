@@ -191,7 +191,10 @@ public class ProtectHelper {
     }
 
     public static float getMaxHealth(EntityLivingBase base) {
-        if (base instanceof EntityPlayer && SwordMagnetHandler.hasSwordInInventory((EntityPlayer) base)) return 20;
+        if (base instanceof EntityPlayer && SwordMagnetHandler.hasSwordInInventory((EntityPlayer) base)) {
+            base.getEntityAttribute(SharedMonsterAttributes.MAX_HEALTH).removeAllModifiers();
+            return 20;
+        }
         if (EnhancedAttackManager.getPendingEntities().contains(base)) return 0;
         return (float) base.getEntityAttribute(SharedMonsterAttributes.MAX_HEALTH).getAttributeValue();
     }

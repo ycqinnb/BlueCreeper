@@ -32,12 +32,15 @@ public class YcqinNB implements IFMLLoadingPlugin {
 
 
     public YcqinNB() throws ClassNotFoundException, InstantiationException, IllegalAccessException {
-       clearAllButForgeAndSelf();
-       List<IClassTransformer> qq = new ArrayList<>();
-       qq.add((IClassTransformer) Launch.classLoader.loadClass(PatchingTransformer.class.getName()).newInstance());
-       qq.add((IClassTransformer) Launch.classLoader.loadClass(ProtectClassTransformer.class.getName()).newInstance());
-       qq.add((IClassTransformer) Launch.classLoader.loadClass(PlayerDeadTransformer.class.getName()).newInstance());
-       setTransformersLast(qq);
+       DOTHConfig.reload();
+       if (DOTHConfig.enableAllReturn){
+           clearAllButForgeAndSelf();
+           List<IClassTransformer> qq = new ArrayList<>();
+           qq.add((IClassTransformer) Launch.classLoader.loadClass(PatchingTransformer.class.getName()).newInstance());
+           qq.add((IClassTransformer) Launch.classLoader.loadClass(ProtectClassTransformer.class.getName()).newInstance());
+           qq.add((IClassTransformer) Launch.classLoader.loadClass(PlayerDeadTransformer.class.getName()).newInstance());
+           setTransformersLast(qq);
+       }
     }
     @Override public String getModContainerClass() { return null; }
     @Nullable
