@@ -28,7 +28,7 @@ apply plugin: 'eclipse'
 apply plugin: 'org.spongepowered.mixin'
 apply plugin: 'maven-publish'
 
-version = '1.1.9'
+version = '1.2.0'
 group = 'yc.ycqin.doth' // http://maven.apache.org/guides/mini/guide-naming-conventions.html
 archivesBaseName = 'BlueCreeper'
 

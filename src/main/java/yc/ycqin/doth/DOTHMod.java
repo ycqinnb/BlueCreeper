@@ -45,7 +45,7 @@ public class DOTHMod
 {
     public static final String MODID = "bluecreepersword";
     public static final String NAME = "蓝C牌电子榨菜";
-    public static final String VERSION = "1.1.9";
+    public static final String VERSION = "1.2.0";
 
     public static Set<Entity> dead = new HashSet<>();
 
